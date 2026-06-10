@@ -1,5 +1,5 @@
 {
-  "moonraker": "ws://snapmaker-u1.local:7125",
+  "moonraker": "ws://192.168.1.101/websocket",
   "printer_name": "Snapmaker U1",
   "bed_size": [350, 350]
 }
