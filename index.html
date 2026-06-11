@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>5AXIS.LIVE — Printer Monitor</title>
+<title>Live FDM Viewer</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
@@ -261,7 +261,7 @@ html, body { height: 100%; overflow: hidden; background: var(--ui-bg1); color: v
 <div id="app">
   <!-- Header -->
   <div id="header">
-    <div class="logo-block">5AXIS<span>.LIVE</span></div>
+    <div class="logo-block">LIVE<span>.FDM</span></div>
     <div style="font-family:var(--mono);font-size:11px;color:var(--text2);padding:0 12px;letter-spacing:0.08em;border-right:1px solid var(--border);height:100%;display:flex;align-items:center;" id="cfg-printer-name"></div>
 
     <div class="tb-group">
@@ -272,10 +272,8 @@ html, body { height: 100%; overflow: hidden; background: var(--ui-bg1); color: v
     <div class="tb-group">
       <span class="tb-label">DISPLAY</span>
       <div class="chip-group">
-        <label class="chip on"  id="chip-se"><input type="checkbox" id="se" checked><span class="dot" style="background:var(--ax-z)"></span>3AX</label>
-        <label class="chip on"  id="chip-s5"><input type="checkbox" id="s5" checked><span class="dot" style="background:var(--ax-x)"></span>5AX</label>
         <label class="chip"     id="chip-st"><input type="checkbox" id="st"><span class="dot" style="background:var(--ax-b)"></span>TRVL</label>
-        <label class="chip"     id="chip-gh"><input type="checkbox" id="gh"><span class="dot" style="background:var(--text3)"></span>GHOST</label>
+        <label class="chip"     id="chip-gh"><input type="checkbox" id="gh"><span class="dot" style="background:var(--text3)"></span>PART</label>
       </div>
     </div>
 
@@ -324,7 +322,7 @@ html, body { height: 100%; overflow: hidden; background: var(--ui-bg1); color: v
             <div class="cb-body">
               <div>
                 <div class="cb-label">MOONRAKER ADDRESS</div>
-                <input class="cb-input" id="ws-input" type="text" value="ws://192.168.1.100:7125" placeholder="ws://192.168.1.100:7125" spellcheck="false" autocomplete="off">
+                <input class="cb-input" id="ws-input" type="text" value="ws://192.168.1.101/websocket?token=beb5671228bd4e25ac2a76ffc4db115d" placeholder="ws://192.168.1.101/websocket?token=beb5671228bd4e25ac2a76ffc4db115d" spellcheck="false" autocomplete="off">
               </div>
               <div class="cb-hint">
                 Enter your Moonraker WebSocket address.<br>
@@ -461,7 +459,7 @@ rootGroup.add(bedGroup);
 rootGroup.add(staticGroup);
 
 // Buildplate
-const bpGeo = new THREE.BoxGeometry(235, 3, 235);
+const bpGeo = new THREE.BoxGeometry(275, 3, 275);
 const bpMat = new THREE.MeshLambertMaterial({ color: 0x1e3a5f, transparent: true, opacity: 0.55 });
 const bpMesh = new THREE.Mesh(bpGeo, bpMat);
 bpMesh.position.set(0, -1.5, 0);
@@ -469,7 +467,7 @@ bedGroup.add(bpMesh);
 
 // Grid
 (function buildGrid(){
-  const w = 235, d = 235, step = 10;
+  const w = 275, d = 275, step = 10;
   const lm = new THREE.LineBasicMaterial({ color: 0x88a0b8, transparent: true, opacity: 0.35 });
   for(let xi = -w/2; xi <= w/2 + 0.01; xi += step){
     const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(xi,0,-d/2), new THREE.Vector3(xi,0,d/2)]);
@@ -642,7 +640,10 @@ animate();
 // ── Chip toggles ──
 document.querySelectorAll('.chip').forEach(chip => {
   const cb = chip.querySelector('input');
-  chip.addEventListener('click', () => { cb.checked = !cb.checked; chip.classList.toggle('on', cb.checked); refreshVisibility(); });
+  // Use change event on checkbox so both label click and direct checkbox click work
+  cb.addEventListener('change', () => { chip.classList.toggle('on', cb.checked); refreshVisibility(); });
+  // Prevent label from double-toggling — let checkbox handle it
+  chip.addEventListener('click', e => { if(e.target === cb) return; cb.checked = !cb.checked; cb.dispatchEvent(new Event('change')); e.preventDefault(); });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -693,7 +694,12 @@ let maxLayer = 0;
 
 // Ghost path
 let ghostMesh3 = null, ghostMesh5 = null, ghostLineT = null;
+let ghostSph3 = null, ghostSph5 = null;
+let ghostRem3 = null, ghostRem5 = null; // faint remainder overlay
 let ghostMoves = [];
+let ghostCum3 = null, ghostCum5 = null, ghostCumT = null;
+let ghostLineSegs = []; // flat list of travel seg endpoints for draw range scrubbing
+let ghostMode = false; // true = scrub ghost instead of accumulating live trail
 
 function newChunk(){
   const mat3 = new THREE.MeshLambertMaterial({ color: 0x3b82f6 });
@@ -703,6 +709,13 @@ function newChunk(){
   m3.count = 0; m5.count = 0;
   m3.frustumCulled = false; m5.frustumCulled = false;
   bedGroup.add(m3); bedGroup.add(m5);
+  // Sphere caps to fill gaps between cylinders
+  const sphGeo = new THREE.SphereGeometry(NOZZLE_DIA/2, 6, 4);
+  const sp3 = new THREE.InstancedMesh(sphGeo, mat3, TRAIL_CHUNK);
+  const sp5 = new THREE.InstancedMesh(sphGeo, mat5, TRAIL_CHUNK);
+  sp3.count = 0; sp5.count = 0;
+  sp3.frustumCulled = false; sp5.frustumCulled = false;
+  bedGroup.add(sp3); bedGroup.add(sp5);
 
   // Travel lines — plain LineSegments grown per-chunk
   const travGeo = new THREE.BufferGeometry();
@@ -713,7 +726,7 @@ function newChunk(){
   travLine.frustumCulled = false;
   bedGroup.add(travLine);
 
-  const chunk = { mesh3: m3, mesh5: m5, meshT: travLine, count3: 0, count5: 0, countT: 0 };
+  const chunk = { mesh3: m3, mesh5: m5, meshT: travLine, sph3: sp3, sph5: sp5, count3: 0, count5: 0, countT: 0 };
   trailChunks.push(chunk);
   return chunk;
 }
@@ -749,11 +762,21 @@ function appendSeg(s0, s1, is5ax, isTravel){
     currentChunk.count5++;
     currentChunk.mesh5.count = currentChunk.count5;
     currentChunk.mesh5.instanceMatrix.needsUpdate = true;
+    // Sphere cap at endpoint
+    dummy.position.set(v1.x, v1.y, v1.z); dummy.scale.set(1,1,1); dummy.updateMatrix();
+    currentChunk.sph5.setMatrixAt(currentChunk.count5-1, dummy.matrix);
+    currentChunk.sph5.count = currentChunk.count5;
+    currentChunk.sph5.instanceMatrix.needsUpdate = true;
   } else {
     currentChunk.mesh3.setMatrixAt(currentChunk.count3, dummy.matrix);
     currentChunk.count3++;
     currentChunk.mesh3.count = currentChunk.count3;
     currentChunk.mesh3.instanceMatrix.needsUpdate = true;
+    // Sphere cap at endpoint
+    dummy.position.set(v1.x, v1.y, v1.z); dummy.scale.set(1,1,1); dummy.updateMatrix();
+    currentChunk.sph3.setMatrixAt(currentChunk.count3-1, dummy.matrix);
+    currentChunk.sph3.count = currentChunk.count3;
+    currentChunk.sph3.instanceMatrix.needsUpdate = true;
   }
 }
 
@@ -763,6 +786,8 @@ function clearTrail(){
     ch.mesh3.geometry.dispose(); ch.mesh3.material.dispose();
     ch.mesh5.geometry.dispose(); ch.mesh5.material.dispose();
     ch.meshT.geometry.dispose(); ch.meshT.material.dispose();
+    if(ch.sph3){ bedGroup.remove(ch.sph3); ch.sph3.geometry.dispose(); }
+    if(ch.sph5){ bedGroup.remove(ch.sph5); ch.sph5.geometry.dispose(); }
   });
   trailChunks = [];
   currentChunk = null;
@@ -772,17 +797,22 @@ function clearTrail(){
 }
 
 function refreshVisibility(){
-  const show3 = document.getElementById('se').checked;
-  const show5 = document.getElementById('s5').checked;
-  const showT = document.getElementById('st').checked;
+  const showT    = document.getElementById('st').checked;
+  const showPart = document.getElementById('gh').checked;
   trailChunks.forEach(ch => {
-    ch.mesh3.visible = show3;
-    ch.mesh5.visible = show5;
+    ch.mesh3.visible = true;
+    ch.mesh5.visible = true;
     ch.meshT.visible = showT;
+    if(ch.sph3) ch.sph3.visible = true;
+    if(ch.sph5) ch.sph5.visible = true;
   });
-  if(ghostMesh3) ghostMesh3.visible = document.getElementById('gh').checked && show3;
-  if(ghostMesh5) ghostMesh5.visible = document.getElementById('gh').checked && show5;
-  if(ghostLineT)  ghostLineT.visible  = document.getElementById('gh').checked && showT;
+  if(ghostMesh3) ghostMesh3.visible = true;
+  if(ghostMesh5) ghostMesh5.visible = true;
+  if(ghostSph3)  ghostSph3.visible  = true;
+  if(ghostSph5)  ghostSph5.visible  = true;
+  if(ghostLineT) ghostLineT.visible = showT;
+  if(ghostRem3)  ghostRem3.visible  = showPart;
+  if(ghostRem5)  ghostRem5.visible  = showPart;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -795,15 +825,26 @@ function buildGhost(text){
   const lines = text.split('\n');
   let x=0,y=0,z=0,b=0,c=0,e=0;
   let absXYZ=true, absE=false;
-  for(const raw of lines){
+  let feedrate=1000, accel=3000;
+  let firstExtrusionSeen=false; // lock absXYZ=true after first real extrusion move
+  // Build a byte offset map: byteOffsets[i] = byte position of start of line i
+  // Moonraker's file_position is the byte offset of the line currently executing
+  const byteOffsets = new Int32Array(lines.length);
+  let runningBytes = 0;
+  for(let i=0;i<lines.length;i++){ byteOffsets[i]=runningBytes; runningBytes+=lines[i].length+1; }
+  for(let li=0;li<lines.length;li++){
+    const raw = lines[li];
+    const lineByteStart = byteOffsets[li];
     const lu = raw.trim().toUpperCase();
     if(!lu || lu[0]===';') continue;
     if(lu.startsWith('M83')){ absE=false; continue; }
     if(lu.startsWith('M82')){ absE=true;  continue; }
     if(lu.startsWith('G90')){ absXYZ=true;  continue; }
-    if(lu.startsWith('G91')){ absXYZ=false; continue; }
+    if(lu.startsWith('G91')){ if(!firstExtrusionSeen) absXYZ=false; continue; } // ignore G91 after print starts
+    if(/^M204\b/.test(lu)){ const sm=lu.match(/[PS]([\d.]+)/); if(sm) accel=parseFloat(sm[1]); continue; }
     const isG0=/^G0\b/.test(lu), isG1=/^G1\b/.test(lu);
     if(!isG0&&!isG1) continue;
+    const fm=lu.match(/F([\d.]+)/); if(fm) feedrate=parseFloat(fm[1]);
     const px=x,py=y,pz=z,pb=b,pc=c;
     const xm=lu.match(/X(-?[\d.]+)/),ym=lu.match(/Y(-?[\d.]+)/),zm=lu.match(/Z(-?[\d.]+)/);
     const bm=lu.match(/B(-?[\d.]+)/),cm=lu.match(/C(-?[\d.]+)/),em=lu.match(/E(-?[\d.]+)/);
@@ -822,13 +863,29 @@ function buildGhost(text){
     if(isG0&&!em) extruding=false;
     const is5ax=Math.abs(b)>0.5||Math.abs(c)>0.5;
     const type=extruding?(is5ax?'e5':'e3'):'travel';
-    const s0=toPart(px,py,pz,pb,pc);
-    const s1=toPart(x,y,z,b,c);
+    const s0=toPart(px+originOffset[0],py+originOffset[1],pz,pb,pc);
+    const s1=toPart(x+originOffset[0],y+originOffset[1],z,b,c);
     const dx=s1[0]-s0[0],dy=s1[1]-s0[1],dz=s1[2]-s0[2];
     if(dx*dx+dy*dy+dz*dz<1e-8) continue;
-    moves.push({type,s0,s1});
+    if(extruding) firstExtrusionSeen=true;
+    // Skip all moves before first real extrusion (homing, probing, purge lines etc)
+    if(!firstExtrusionSeen) continue;
+    moves.push({type,s0,s1,filePos:lineByteStart,mf:feedrate,maccel:accel});
   }
   ghostMoves = moves;
+
+  // Build cumulative index arrays for fast scrubbing by file_position
+  // ghostCum3[i], ghostCum5[i], ghostCumT[i] = number of e3/e5/travel moves before ghostMoves[i]
+  ghostCum3 = new Int32Array(moves.length + 1);
+  ghostCum5 = new Int32Array(moves.length + 1);
+  ghostCumT = new Int32Array(moves.length + 1);
+  let n3=0, n5=0, nT=0;
+  for(let i=0; i<moves.length; i++){
+    if(moves[i].type==='e3') n3++;
+    else if(moves[i].type==='e5') n5++;
+    else nT++;
+    ghostCum3[i+1]=n3; ghostCum5[i+1]=n5; ghostCumT[i+1]=nT;
+  }
 
   const segs3 = moves.filter(m=>m.type==='e3');
   const segs5 = moves.filter(m=>m.type==='e5');
@@ -838,7 +895,7 @@ function buildGhost(text){
 
   function makeGhostInstanced(segs, color){
     if(!segs.length) return null;
-    const mat = new THREE.MeshLambertMaterial({ color, transparent: true, opacity: 0.12 });
+    const mat = new THREE.MeshLambertMaterial({ color, transparent: false, opacity: 1.0 });
     const mesh = new THREE.InstancedMesh(ghostCylGeo, mat, segs.length);
     for(let i=0;i<segs.length;i++){
       const [x0,y0,z0]=segs[i].s0,[x1,y1,z1]=segs[i].s1;
@@ -855,10 +912,58 @@ function buildGhost(text){
     return mesh;
   }
 
-  ghostMesh3 = makeGhostInstanced(segs3, 0x3b82f6);
-  ghostMesh5 = makeGhostInstanced(segs5, 0xef4444);
+  ghostMesh3 = makeGhostInstanced(segs3, 0xe87020);
+  ghostMesh5 = makeGhostInstanced(segs5, 0xe84040);
   if(ghostMesh3) bedGroup.add(ghostMesh3);
   if(ghostMesh5) bedGroup.add(ghostMesh5);
+
+  // Sphere caps for ghost meshes
+  const sphR = NOZZLE_DIA/2;
+  const sphG = new THREE.SphereGeometry(sphR, 6, 4);
+  function makeGhostSpheres(segs, color){
+    if(!segs.length) return null;
+    const mat = new THREE.MeshLambertMaterial({ color, transparent: false, opacity: 1.0 });
+    const mesh = new THREE.InstancedMesh(sphG, mat, segs.length);
+    for(let i=0;i<segs.length;i++){
+      const [x1,y1,z1] = segs[i].s1;
+      dummy.position.set(x1, z1, -y1); dummy.scale.set(1,1,1); dummy.updateMatrix();
+      mesh.setMatrixAt(i, dummy.matrix);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.count = 0;
+    mesh.frustumCulled = false;
+    return mesh;
+  }
+  ghostSph3 = makeGhostSpheres(segs3, 0xe87020);
+  ghostSph5 = makeGhostSpheres(segs5, 0xe84040);
+  if(ghostSph3) bedGroup.add(ghostSph3);
+  if(ghostSph5) bedGroup.add(ghostSph5);
+
+  // Remainder overlay — full model at low opacity, shows unprinted portion
+  function makeRemaining(segs, color){
+    if(!segs.length) return null;
+    const mat = new THREE.MeshLambertMaterial({ color, transparent: true, opacity: 0.10 });
+    const mesh = new THREE.InstancedMesh(ghostCylGeo, mat, segs.length);
+    for(let i=0;i<segs.length;i++){
+      const [x0,y0,z0]=segs[i].s0,[x1,y1,z1]=segs[i].s1;
+      const v0=new THREE.Vector3(x0,z0,-y0),v1=new THREE.Vector3(x1,z1,-y1);
+      const len=v0.distanceTo(v1);
+      if(len<0.001){mesh.setMatrixAt(i,new THREE.Matrix4());continue;}
+      dummy.position.copy(v0).lerp(v1,0.5);
+      dummy.scale.set(1,len,1);
+      dummy.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),v1.clone().sub(v0).normalize());
+      dummy.updateMatrix(); mesh.setMatrixAt(i,dummy.matrix);
+    }
+    mesh.instanceMatrix.needsUpdate=true;
+    mesh.frustumCulled=false;
+    mesh.visible=false;
+    return mesh;
+  }
+  ghostRem3 = makeRemaining(segs3, 0x3b82f6);
+  ghostRem5 = makeRemaining(segs5, 0xef4444);
+  // Full count — always show complete model when PART is toggled on
+  if(ghostRem3){ ghostRem3.count = segs3.length; ghostRem3.instanceMatrix.needsUpdate = true; bedGroup.add(ghostRem3); }
+  if(ghostRem5){ ghostRem5.count = segs5.length; ghostRem5.instanceMatrix.needsUpdate = true; bedGroup.add(ghostRem5); }
 
   if(segsT.length){
     const pts = [];
@@ -868,11 +973,16 @@ function buildGhost(text){
     }
     ghostLineT = new THREE.LineSegments(
       new THREE.BufferGeometry().setFromPoints(pts),
-      new THREE.LineBasicMaterial({ color: 0xf59e0b, transparent: true, opacity: 0.08 })
+      new THREE.LineBasicMaterial({ color: 0xf59e0b, transparent: true, opacity: 0.5 })
     );
     ghostLineT.frustumCulled = false;
+    ghostLineT.geometry.setDrawRange(0, 0); // start hidden, scrubbed live
     bedGroup.add(ghostLineT);
   }
+  // Start ghost meshes at count=0 — scrubbed by applyGhostProgress
+  if(ghostMesh3) ghostMesh3.count = 0;
+  if(ghostMesh5) ghostMesh5.count = 0;
+  ghostMode = true;
 
   // Fit camera to ghost
   if(ghostMesh3||ghostMesh5){
@@ -892,16 +1002,195 @@ function buildGhost(text){
   }
 
   document.getElementById('ps-ghost').textContent = moves.length.toLocaleString() + ' moves';
+  buildMoveTimes();
+  // If already mid-print, start playback from current file position
+  if(printerState.filePosition != null && printerState.state === 'printing'){
+    let lo=0, hi=ghostMoves.length-1;
+    while(lo<hi){ const mid=(lo+hi+1)>>1; if(ghostMoves[mid].filePos<=printerState.filePosition) lo=mid; else hi=mid-1; }
+    startPlayback(moveCumTime[lo]);
+    lastSyncTime = performance.now();
+    console.log('[playback] started mid-print at', moveCumTime[lo].toFixed(1), 's (filePos='+printerState.filePosition+')');
+  }
   refreshVisibility();
+}
+
+// Scrub ghost path to a given file byte position
+function applyGhostProgress(filePos){
+  if(!ghostMoves.length || !ghostCum3) return;
+  // Binary search for the last move with filePos <= target
+  let lo=0, hi=ghostMoves.length-1, idx=0;
+  while(lo<=hi){ const mid=(lo+hi)>>1; if(ghostMoves[mid].filePos<=filePos){idx=mid;lo=mid+1;}else hi=mid-1; }
+  const moveIdx = idx + 1;
+  if(ghostMesh3) { ghostMesh3.count = ghostCum3[moveIdx]; ghostMesh3.instanceMatrix.needsUpdate = true; }
+  if(ghostMesh5) { ghostMesh5.count = ghostCum5[moveIdx]; ghostMesh5.instanceMatrix.needsUpdate = true; }
+  if(ghostSph3)  { ghostSph3.count  = ghostCum3[moveIdx]; ghostSph3.instanceMatrix.needsUpdate  = true; }
+  if(ghostSph5)  { ghostSph5.count  = ghostCum5[moveIdx]; ghostSph5.instanceMatrix.needsUpdate  = true; }
+  if(ghostLineT){ ghostLineT.geometry.setDrawRange(0, ghostCumT[moveIdx] * 2); ghostLineT.visible = document.getElementById('st').checked; }
+
+  // Update nozzle to end position of current move
+  const m = ghostMoves[Math.max(0, moveIdx-1)];
+  if(m){
+    // s1 already has originOffset baked in from buildGhost parser
+    const [px,py,pz] = m.s1;
+    staticGroup.position.set(px, pz, -py);
+  }
+
+  currentLayer = 0;
+  for(let i=0;i<moveIdx;i++) if(ghostMoves[i].type!=='travel' && i>0 && ghostMoves[i].s1[2] > ghostMoves[i-1].s1[2]+0.09) currentLayer++;
+  totalMoves = moveIdx;
 }
 
 function clearGhost(){
   if(ghostMesh3){ bedGroup.remove(ghostMesh3); ghostMesh3.geometry.dispose(); ghostMesh3.material.dispose(); ghostMesh3=null; }
   if(ghostMesh5){ bedGroup.remove(ghostMesh5); ghostMesh5.geometry.dispose(); ghostMesh5.material.dispose(); ghostMesh5=null; }
+  if(ghostSph3){  bedGroup.remove(ghostSph3);  ghostSph3.geometry.dispose();  ghostSph3.material.dispose();  ghostSph3=null; }
+  if(ghostSph5){  bedGroup.remove(ghostSph5);  ghostSph5.geometry.dispose();  ghostSph5.material.dispose();  ghostSph5=null; }
+  if(ghostRem3){  bedGroup.remove(ghostRem3);  ghostRem3.geometry.dispose();  ghostRem3.material.dispose();  ghostRem3=null; }
+  if(ghostRem5){  bedGroup.remove(ghostRem5);  ghostRem5.geometry.dispose();  ghostRem5.material.dispose();  ghostRem5=null; }
   if(ghostLineT) { bedGroup.remove(ghostLineT);  ghostLineT.geometry.dispose();  ghostLineT.material.dispose();  ghostLineT=null;  }
   ghostMoves = [];
+  ghostCum3 = ghostCum5 = ghostCumT = null;
+  ghostMode = false;
   document.getElementById('ps-ghost').textContent = '—';
 }
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PLAYBACK ENGINE — acceleration-aware realtime simulation with Moonraker sync
+// Ported from main simulator. Drives ghost mesh count via move index.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── Trapezoidal velocity profile ──────────────────────────────────────────
+function trapMoveTime(segLen, mf, maccel){
+  if(segLen <= 0) return 0;
+  const v = mf / 60;
+  const a = Math.max(1, maccel || 3000);
+  const rampDist = (v * v) / (2 * a);
+  if(2 * rampDist >= segLen){
+    return 2 * Math.sqrt(a * segLen) / a;
+  }
+  const t_ramp = v / a;
+  const d_cruise = segLen - 2 * rampDist;
+  return 2 * t_ramp + d_cruise / v;
+}
+
+// ── Move time tables ───────────────────────────────────────────────────────
+let moveTimes   = null;   // Float64Array — duration of each move in seconds
+let moveCumTime = null;   // Float64Array — cumulative time at start of move i
+let totalRealTime = 0;
+
+function buildMoveTimes(){
+  if(!ghostMoves.length) return;
+  moveTimes   = new Float64Array(ghostMoves.length);
+  moveCumTime = new Float64Array(ghostMoves.length + 1);
+  moveCumTime[0] = 0;
+  for(let i = 0; i < ghostMoves.length; i++){
+    const m = ghostMoves[i];
+    const [x0,y0,z0] = m.s0, [x1,y1,z1] = m.s1;
+    const segLen = Math.sqrt((x1-x0)**2+(y1-y0)**2+(z1-z0)**2);
+    moveTimes[i] = trapMoveTime(segLen, m.mf||1000, m.maccel||3000);
+    moveCumTime[i+1] = moveCumTime[i] + moveTimes[i];
+  }
+  totalRealTime = moveCumTime[ghostMoves.length];
+  console.log('[playback] built move times, total:', totalRealTime.toFixed(1), 's for', ghostMoves.length, 'moves');
+}
+
+// ── Playback state ─────────────────────────────────────────────────────────
+let pbPlaying    = false;
+let pbElapsed    = 0;       // simulated seconds into print
+let pbLastNow    = null;    // performance.now() at last frame
+let pbSpeedMult  = 1.0;     // drift correction multiplier (nominal = 1.0)
+let pbRafHandle  = null;
+let pbMoveIdx    = 0;       // current move index
+
+// Sync state
+let syncFilePos  = null;    // last real file_position from Moonraker
+let syncSimPos   = null;    // simulated file_position at last sync
+let lastSyncTime = 0;       // performance.now() of last sync
+const SYNC_INTERVAL = 1000; // ms between sync corrections
+const MAX_SPEED_MULT = 4.0; // clamp correction multiplier
+
+function startPlayback(fromElapsed){
+  pbElapsed  = fromElapsed || 0;
+  pbLastNow  = performance.now();
+  pbPlaying  = true;
+  pbSpeedMult = 1.0;
+  if(pbRafHandle) cancelAnimationFrame(pbRafHandle);
+  pbRafHandle = requestAnimationFrame(pbFrame);
+}
+
+function stopPlayback(){
+  pbPlaying = false;
+  if(pbRafHandle){ cancelAnimationFrame(pbRafHandle); pbRafHandle = null; }
+}
+
+function pbFrame(now){
+  if(!pbPlaying){ return; }
+  const dt = (now - pbLastNow) / 1000;
+  pbLastNow = now;
+  pbElapsed += dt * pbSpeedMult;
+
+  // Clamp to total time
+  if(pbElapsed >= totalRealTime) pbElapsed = totalRealTime;
+
+  // Binary search for current move index
+  let lo=0, hi=ghostMoves.length;
+  while(lo<hi){ const mid=(lo+hi)>>1; if(moveCumTime[mid]<=pbElapsed) lo=mid+1; else hi=mid; }
+  pbMoveIdx = Math.max(0, lo-1);
+
+  // Scrub ghost meshes to current move index
+  applyGhostProgress(ghostMoves[pbMoveIdx]?.filePos || 0);
+
+  // Smoothly interpolate nozzle within current move
+  const curMove = ghostMoves[pbMoveIdx];
+  if(curMove){
+    const moveStart = moveCumTime[pbMoveIdx];
+    const moveDur   = moveTimes[pbMoveIdx];
+    const t = moveDur > 0 ? Math.min(1, (pbElapsed - moveStart) / moveDur) : 1;
+    const [x0,y0,z0] = curMove.s0;
+    const [x1,y1,z1] = curMove.s1;
+    staticGroup.position.set(
+      x0 + (x1-x0)*t,
+      z0 + (z1-z0)*t,
+      -(y0 + (y1-y0)*t)
+    );
+  }
+
+  // Sync correction every SYNC_INTERVAL ms
+  if(syncFilePos != null && now - lastSyncTime > SYNC_INTERVAL){
+    lastSyncTime = now;
+    // Find simulated file_position at current move
+    const simFP = ghostMoves[pbMoveIdx]?.filePos || 0;
+    const realFP = syncFilePos;
+    // Find what elapsed time corresponds to realFP
+    let lo2=0, hi2=ghostMoves.length-1;
+    while(lo2<hi2){ const mid=(lo2+hi2+1)>>1; if(ghostMoves[mid].filePos<=realFP) lo2=mid; else hi2=mid-1; }
+    const realElapsed = moveCumTime[lo2];
+    const drift = realElapsed - pbElapsed; // positive = printer is ahead of sim
+    // Always smooth correction — no snapping, just adjust speed
+    // Close drift over next 8 seconds, allow wide speed range for large drifts
+    const correction = drift / 8.0;
+    pbSpeedMult = Math.max(0.05, Math.min(5.0, 1.0 + correction));
+    console.log('[sync] drift', drift.toFixed(2), 's, speedMult', pbSpeedMult.toFixed(3));
+  }
+
+  pbRafHandle = requestAnimationFrame(pbFrame);
+}
+
+// Called from applyPrinterStatus when virtual_sdcard updates
+function onSyncFilePos(filePos){
+  syncFilePos = filePos;
+  // Auto-start playback when print is active and ghost is ready
+  if(!pbPlaying && ghostMoves.length && moveCumTime && printerState.state === 'printing'){
+    // Find starting elapsed time from current file position
+    let lo=0, hi=ghostMoves.length-1;
+    while(lo<hi){ const mid=(lo+hi+1)>>1; if(ghostMoves[mid].filePos<=filePos) lo=mid; else hi=mid-1; }
+    startPlayback(moveCumTime[lo]);
+    lastSyncTime = performance.now();
+    console.log('[playback] auto-started at', moveCumTime[lo].toFixed(1), 's');
+  }
+}
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MOONRAKER WEBSOCKET
@@ -911,6 +1200,9 @@ let wsUrl = '';
 let wsId = 1;
 let pendingCalls = {};
 let connState = 'disconnected'; // 'connecting' | 'live' | 'error' | 'disconnected'
+
+// Origin offset — shifts all coordinates so corner-origin printers center on the buildplate
+let originOffset = [-137.5, -137.5]; // [x, y] in mm
 
 // Printer state
 let printerState = {
@@ -926,6 +1218,8 @@ let printerState = {
   printDuration: 0,
   totalDuration: 0,
   layer: 0,
+  filePosition: null,
+  fileSize: null,
 };
 let prevPos = null;
 let prevExtrude = false;
@@ -961,7 +1255,14 @@ function connect(url){
   setConnState('connecting');
   document.getElementById('cb-error').textContent = '';
 
-  ws = new WebSocket(url + '/websocket');
+  // Normalize URL: parse properly so ?token= query string doesn't get /websocket appended after it
+  let wsEndpoint = url;
+  try {
+    const u = new URL(url.startsWith('ws') ? url : 'ws://' + url);
+    if(!u.pathname.endsWith('/websocket')) u.pathname = u.pathname.replace(/\/+$/, '') + '/websocket';
+    wsEndpoint = u.toString();
+  } catch(e) { wsEndpoint = url; }
+  ws = new WebSocket(wsEndpoint);
 
   ws.onopen = async () => {
     try {
@@ -978,6 +1279,7 @@ function connect(url){
           'fan':      ['speed'],
           print_stats:['filename', 'state', 'print_duration', 'total_duration', 'info'],
           display_status: ['progress'],
+          virtual_sdcard: ['file_position', 'file_size', 'is_active'],
         }
       });
 
@@ -990,6 +1292,7 @@ function connect(url){
           fan: ['speed'],
           print_stats: ['filename','state','print_duration','total_duration','info'],
           display_status: ['progress'],
+          virtual_sdcard: ['file_position','file_size','is_active'],
         }
       });
       if(res && res.status) applyPrinterStatus(res.status, true);
@@ -1064,16 +1367,6 @@ function applyPrinterStatus(status, initial){
     const extruding = eDelta > 0.0001;
     const is5ax = Math.abs(printerState.b) > 0.5 || Math.abs(printerState.c) > 0.5;
 
-    if(!initial && prevPos){
-      const s0 = toPart(prevPos.x, prevPos.y, prevPos.z, prevPos.b, prevPos.c);
-      const s1 = toPart(nx, ny, nz, printerState.b, printerState.c);
-      const dx=s1[0]-s0[0],dy=s1[1]-s0[1],dz=s1[2]-s0[2];
-      if(dx*dx+dy*dy+dz*dz > 1e-6){
-        appendSeg(s0, s1, is5ax, !extruding);
-        totalMoves++;
-        if(nz > printerState.z + 0.1) currentLayer++;
-      }
-    }
     prevPos = { x:nx, y:ny, z:nz, b:printerState.b, c:printerState.c };
     posUpdated = true;
   }
@@ -1106,15 +1399,22 @@ function applyPrinterStatus(status, initial){
       clearTrail();
       clearGhost();
       prevPos = null; prevE = 0;
-      if(document.getElementById('gh').checked){
-        fetchGhostPath(ps.filename);
-      }
+      // Always fetch ghost for scrubbing; visibility controlled by chip
+      fetchGhostPath(ps.filename);
     }
     if(ps.state === 'complete' || ps.state === 'error' || ps.state === 'cancelled'){
       lastFile = '';
+      stopPlayback();
     }
   }
   if(ds && ds.progress != null) printerState.progress = ds.progress;
+
+  // virtual_sdcard — feed file_position to playback engine for sync
+  const vs = status.virtual_sdcard;
+  if(vs){
+    if(vs.file_position != null){ printerState.filePosition = vs.file_position; onSyncFilePos(vs.file_position); }
+    if(vs.file_size != null)     printerState.fileSize = vs.file_size;
+  }
 
   updateUI();
 }
@@ -1128,14 +1428,22 @@ async function fetchGhostPath(filename){
   document.getElementById('ps-ghost').textContent = 'loading…';
   try {
     // Moonraker file server endpoint
-    const base = wsUrl.replace(/^ws/, 'http').replace('/websocket','');
-    const url = `${base}/server/files/gcodes/${encodeURIComponent(filename)}`;
+    const base = wsUrl.replace(/^ws/, 'http').replace(/\/websocket.*$/, '');
+    console.log('[ghost] wsUrl=', wsUrl, 'base=', base);
+    // Extract token from wsUrl query string if present
+    const tokenMatch = wsUrl.match(/[?&]token=([^&]+)/);
+    const tokenParam = tokenMatch ? `?token=${tokenMatch[1]}` : '';
+    const url = `${base}/server/files/gcodes/${encodeURIComponent(filename)}${tokenParam}`;
+    console.log('[ghost] fetching:', url, 'filename:', filename);
     const res = await fetch(url);
     if(!res.ok) throw new Error('HTTP ' + res.status);
     const text = await res.text();
+    console.log('[ghost] file loaded, length:', text.length, 'bytes');
     buildGhost(text);
+    console.log('[ghost] buildGhost complete');
   } catch(e){
-    document.getElementById('ps-ghost').textContent = 'unavailable';
+    console.error('[ghost] error:', e, e.stack);
+    document.getElementById('ps-ghost').textContent = 'unavailable: ' + e.message;
   }
   ghostFetching = false;
 }
@@ -1224,8 +1532,10 @@ function updateUI(){
   document.getElementById('ps-state').textContent = (p.state || '—').toUpperCase();
   document.getElementById('ps-moves').textContent = totalMoves.toLocaleString();
 
-  // Nozzle position
-  staticGroup.position.set(p.x, p.z, -p.y);
+  // Nozzle position — only use live position when not in ghost playback mode
+  if(!ghostMode){
+    staticGroup.position.set(p.x + originOffset[0], p.z, -(p.y + originOffset[1]));
+  }
   updateBedFromPos(p.b, p.c);
 
   // Corner right
@@ -1258,6 +1568,7 @@ document.getElementById('disconnectBtn').addEventListener('click', () => {
   showOverlay();
   clearTrail();
   clearGhost();
+  stopPlayback();
   prevPos = null; prevE = 0;
   lastFile = '';
 });
@@ -1325,6 +1636,11 @@ async function startup(){
       // Apply bed size if provided
       if(Array.isArray(cfg.bed_size) && cfg.bed_size.length >= 2){
         applyBedSize(cfg.bed_size[0], cfg.bed_size[1]);
+      }
+
+      // Apply origin offset if provided
+      if(Array.isArray(cfg.origin_offset) && cfg.origin_offset.length >= 2){
+        originOffset = [cfg.origin_offset[0], cfg.origin_offset[1]];
       }
 
       // Auto-connect if moonraker address present
