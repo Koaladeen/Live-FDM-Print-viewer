@@ -1,5 +1,5 @@
 {
-  "moonraker": "ws://192.168.1.101/websocket",
+  "moonraker": "wss://live.koaladeen.com/websocket?token=beb5671228bd4e25ac2a76ffc4db115d",
   "printer_name": "Snapmaker U1",
   "bed_size": [350, 350]
 }
