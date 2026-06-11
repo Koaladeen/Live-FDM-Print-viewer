@@ -313,7 +313,7 @@ html, body { height: 100%; overflow: hidden; background: var(--ui-bg1); color: v
         </div>
 
         <!-- Connect overlay -->
-        <div id="connect-overlay">
+        <div id="connect-overlay" style="display:none;">
           <div id="connect-box">
             <div class="cb-head">
               <span class="cb-head-logo">⚡</span>
@@ -1653,6 +1653,7 @@ async function startup(){
   } catch(e){ /* config.json absent or invalid — fall through */ }
 
   // 3 — nothing found, show overlay
+  showOverlay();
 }
 
 startup();
