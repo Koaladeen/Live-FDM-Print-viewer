@@ -600,15 +600,15 @@ const printerMeshes = [];
 let printerLoaded = false;
 
 function updateCoreXYGroups(x, y, z){
-  yGantryGroup.position.z  =  (y + originOffset[1]); // Y → Three.js +Z
-  toolheadGroup.position.x = -(x + originOffset[0]); // X → Three.js -X (flip to match machine)
+  // Match trail coordinate system exactly: Three.js X=x+offX, Z=-(y+offY), Y=z
+  yGantryGroup.position.z  = -(y + originOffset[1]); // machine Y → Three.js -Z
+  toolheadGroup.position.x =   x + originOffset[0];  // machine X → Three.js X
   toolheadGroup.position.y = 0;
-  bedGroup.position.set(originOffset[0], -z, -originOffset[1]); // bed centred + Z lift
+  bedGroup.position.set(0, -z, 0);
 }
 
-// Legacy bed quaternion for B/C (kept for toPart() trail transform)
 function updateBedFromPos(z, b, c){
-  bedGroup.position.set(0, -z, 0);
+  // Only update rotation (B/C for 5-axis) — Z position handled by updateCoreXYGroups
   bedGroup.quaternion.copy(calcBedQuat(b, c));
 }
 
@@ -841,11 +841,6 @@ function toPart(x, y, z, bDeg, cDeg){
   const v = new THREE.Vector3(x, z, -y);
   v.applyQuaternion(q.clone().invert());
   return [v.x, -v.z, v.y];
-}
-
-function updateBedFromPos(z, b, c){
-  bedGroup.quaternion.copy(calcBedQuat(b, c));
-  bedGroup.position.set(0, z, 0);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1899,6 +1894,19 @@ async function loadPrinterJson(basePath){
                         : groupId === 'toolhead'  ? toolheadGroup
                         : groupId === 'bed'        ? bedGroup
                         :                           frameGroup;
+
+      // Builder exports world-space positions. Convert to group-local space
+      // by subtracting the group's home-position offset (at x=0,y=0,z=0).
+      // home: yGantryGroup.z = -(0+offY) = -offY → subtract -offY → add offY
+      //       toolheadGroup.x = 0+offX = offX → subtract offX
+      //       bedGroup.y = 0 → no adjustment
+      if(groupId === 'y_gantry'){
+        wrapper.position.z += originOffset[1]; // undo gantry home Z offset
+      } else if(groupId === 'toolhead'){
+        wrapper.position.x -= originOffset[0]; // undo toolhead home X offset
+        wrapper.position.z += originOffset[1]; // undo gantry home Z offset (inherited)
+      }
+
       targetGroup.add(wrapper);
 
       wrapper.visible = showSTL;
