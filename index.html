@@ -1939,10 +1939,11 @@ async function loadPrinterJson(basePath){
       //   group.x = mx + offX → world.x = mx + offX + local.x = mx + offX + authored.x - offX = mx + authored.x
       // That means part moves with nozzle X offset by authored.x ✓ — correct!
       if(groupId === 'y_gantry'){
-        wrapper.position.z += originOffset[1]; // local.z = world.z + offY
+        wrapper.position.z += originOffset[1];
+        wrapper.position.x += originOffset[0];
       } else if(groupId === 'toolhead'){
-        wrapper.position.x -= originOffset[0]; // local.x = world.x - offX = world.x + 90
-        wrapper.position.z += originOffset[1]; // local.z = world.z + offY
+        wrapper.position.x += originOffset[0];
+        wrapper.position.z += originOffset[1];
       }
 
       targetGroup.add(wrapper);
