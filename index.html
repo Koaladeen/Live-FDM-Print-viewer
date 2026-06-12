@@ -1943,14 +1943,14 @@ async function loadPrinterJson(basePath){
       // BUT this only works if machine is at home. When machine moves to x=mx:
       //   group.x = mx + offX → world.x = mx + offX + local.x = mx + offX + authored.x - offX = mx + authored.x
       // That means part moves with nozzle X offset by authored.x ✓ — correct!
-      // At machine home (x=0,y=0):
-      // yGantryGroup.z = -(0+offY) = -offY = +90  → local.z = world.z - 90 = world.z + offY
-      // toolheadGroup = (offX, 0, -offY) = (-90,0,+90) → local.x = world.x - offX, local.z = world.z + offY
       if(groupId === 'y_gantry'){
-        wrapper.position.z += originOffset[1]; // world.z + (-90) = world.z - 90 ✓
+        wrapper.position.z += originOffset[1];
       } else if(groupId === 'toolhead'){
-        wrapper.position.x -= originOffset[0]; // world.x - (-90) = world.x + 90 ✓
-        wrapper.position.z += originOffset[1]; // world.z - 90 ✓
+        wrapper.position.x -= originOffset[0];
+        wrapper.position.z += originOffset[1];
+      } else if(groupId === 'bed'){
+        wrapper.position.x += originOffset[0];
+        wrapper.position.z -= originOffset[1];
       }
 
       targetGroup.add(wrapper);
