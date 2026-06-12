@@ -1,5 +1,5 @@
 {
   "moonraker": "wss://live.koaladeen.com/websocket",
-  "bed_size": [180, 180],
+  "bed_size": [0, 0],
   "printer_path": "./printer/"
 }
