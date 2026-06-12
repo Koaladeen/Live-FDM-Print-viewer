@@ -1,6 +1,6 @@
 {
   "_version": 1,
-  "printer_name": "test",
+  "printer_name": "CoreXY Printer",
   "origin": "bed_centre_surface",
   "kinematic_nodes": [
     {
@@ -45,13 +45,13 @@
   "parts": [
     {
       "id": "id_100",
-      "label": "Y",
-      "node": "nth",
-      "file": "Y.stl",
+      "label": "Frame v12",
+      "node": "ns",
+      "file": "Frame v12.stl",
       "position": [
         0,
-        -1.675,
-        -0.367
+        0,
+        -106.167
       ],
       "rotation": [
         0,
@@ -63,17 +63,17 @@
     },
     {
       "id": "id_101",
-      "label": "X",
-      "node": "ns",
-      "file": "X.stl",
+      "label": "Bed_Assembly v9",
+      "node": "nth",
+      "file": "Y_Axis_Assembly v91.stl",
       "position": [
-        0,
-        0,
-        0
+        76.122,
+        15.063,
+        25.071
       ],
       "rotation": [
         0,
-        0,
+        15,
         0
       ],
       "color": "#aaaaaa",
@@ -81,20 +81,38 @@
     },
     {
       "id": "id_102",
-      "label": "C",
-      "node": "nb",
-      "file": "C.stl",
+      "label": "X_Axis_Assembly v91(1)",
+      "node": "nte",
+      "file": "X_Axis_Assembly v91(1).stl",
       "position": [
+        76.989,
+        12.78,
+        25.853
+      ],
+      "rotation": [
         0,
-        0,
+        15,
         0
+      ],
+      "color": "#e09020",
+      "opacity": 0.55
+    },
+    {
+      "id": "id_103",
+      "label": "Bed_Assembly v9",
+      "node": "nb",
+      "file": "Bed_Assembly v9.stl",
+      "position": [
+        -55.087,
+        44.646,
+        80.856
       ],
       "rotation": [
         0,
         0,
-        0
+        90
       ],
-      "color": "#e09020",
+      "color": "#cc4444",
       "opacity": 0.55
     }
   ]
