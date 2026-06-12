@@ -1932,26 +1932,10 @@ async function loadPrinterJson(basePath){
                         : groupId === 'bed'        ? bedGroup
                         :                           frameGroup;
 
-      // Parts are authored in world space (bed-centre = 0,0,0).
-      // No group-local correction needed — parts sit at their authored world position.
-      // The groups are offset by originOffset in updateCoreXYGroups, so we pre-apply
-      // the inverse here so that at machine home (x=0,y=0) parts appear at correct world pos.
-      // At home: toolheadGroup.x = offX, yGantryGroup.z = -offY
-      // We want part world pos = authored pos, so local = authored - group_home_pos
-      // toolhead: local.x = authored.x - offX,  local.z = authored.z - (-offY) = authored.z + offY
-      // y_gantry: local.z = authored.z + offY (inherits gantry z only)
-      // BUT this only works if machine is at home. When machine moves to x=mx:
-      //   group.x = mx + offX → world.x = mx + offX + local.x = mx + offX + authored.x - offX = mx + authored.x
-      // That means part moves with nozzle X offset by authored.x ✓ — correct!
-      if(groupId === 'y_gantry'){
-        wrapper.position.z += originOffset[1];
-      } else if(groupId === 'toolhead'){
-        wrapper.position.x -= originOffset[0];
-        wrapper.position.z += originOffset[1];
-      } else if(groupId === 'bed'){
-        wrapper.position.x += originOffset[0];
-        wrapper.position.z -= originOffset[1];
-      }
+      // Parts are authored in machine coordinates (bed corner = 0,0,0).
+      // updateCoreXYGroups already translates each group by originOffset so that
+      // machine position (0,0) maps to world-space bed corner.
+      // No additional correction is needed — the group translation handles it.
 
       targetGroup.add(wrapper);
 
