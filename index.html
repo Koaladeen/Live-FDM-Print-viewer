@@ -1900,12 +1900,14 @@ async function loadPrinterJson(basePath){
       // At machine home (x=0,y=0,z=0):
       //   yGantryGroup world pos: z = -(0 + offY) = -offY = +117.5
       //   toolheadGroup world pos: x = 0 + offX = -117.5, inherits gantry z
-      //   bedGroup/frameGroup: at world [0,0,0] → no correction
+      // Parts authored in world space (bed-centre). Convert to group-local space.
+      // yGantryGroup home z = -(0+offY) = +117.5  → local.z = world.z + offY
+      // toolheadGroup home x = offX = -117.5       → local.x = world.x - offX
       if(groupId === 'y_gantry'){
-        wrapper.position.z += originOffset[1]; // local.z = world.z - (-offY) = world.z + offY
+        wrapper.position.z += originOffset[1];
       } else if(groupId === 'toolhead'){
-        wrapper.position.x -= originOffset[0]; // local.x = world.x - offX
-        wrapper.position.z += originOffset[1]; // local.z = world.z + offY (gantry inherited)
+        wrapper.position.x -= originOffset[0];
+        wrapper.position.z += originOffset[1];
       }
 
       targetGroup.add(wrapper);
