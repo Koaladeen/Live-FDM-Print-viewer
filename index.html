@@ -602,9 +602,9 @@ let printerLoaded = false;
 function updateCoreXYGroups(x, y, z){
   const wx = x + originOffset[0];
   const wz = -(y + originOffset[1]);
-  yGantryGroup.position.set(0, 0, wz);    // gantry moves Y only
-  toolheadGroup.position.set(wx, 0, wz);  // toolhead moves X+Y (explicit both)
-  bedGroup.position.set(0, -z, 0);
+  yGantryGroup.position.set(0, 0, wz);
+  toolheadGroup.position.set(wx, 0, wz);
+  bedGroup.position.set(0, -z, 0); // bed centred at world origin — STL offsets handle XZ
 }
 
 function updateBedFromPos(z, b, c){
@@ -1887,6 +1887,11 @@ async function loadPrinterJson(basePath){
 
   const parts = json.parts || [];
   const showSTL = document.getElementById('stl-toggle').checked;
+
+  // Apply bed size from printer.json if present and config.json didn't set it
+  if(Array.isArray(json.bed_size) && json.bed_size.length >= 2){
+    applyBedSize(json.bed_size[0], json.bed_size[1]);
+  }
 
   for(const part of parts){
     if(!part.file) continue;
