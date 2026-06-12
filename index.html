@@ -274,7 +274,7 @@ html, body { height: 100%; overflow: hidden; background: var(--ui-bg1); color: v
       <div class="chip-group">
         <label class="chip"     id="chip-st"><input type="checkbox" id="st"><span class="dot" style="background:var(--ax-b)"></span>TRVL</label>
         <label class="chip"     id="chip-gh"><input type="checkbox" id="gh"><span class="dot" style="background:var(--text3)"></span>PART</label>
-        <label class="chip"     id="chip-stl" title="Load STL file for printer part overlay"><input type="checkbox" id="stl-toggle"><span class="dot" style="background:var(--teal)"></span>STL</label>
+        <label class="chip on" id="chip-stl" title="Show/hide printer parts"><input type="checkbox" id="stl-toggle" checked><span class="dot" style="background:var(--teal)"></span>PRINTER</label>
       </div>
     </div>
 
@@ -427,7 +427,7 @@ html, body { height: 100%; overflow: hidden; background: var(--ui-bg1); color: v
 
         <!-- STL overlay -->
         <div class="ps" style="margin-top:0;">
-          <div class="ps-head">STL OVERLAY</div>
+          <div class="ps-head">PRINTER MODEL</div>
           <div class="ps-body">
             <div class="st-row"><span class="st-k">File</span><span class="st-v" id="stl-name" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;">—</span></div>
             <div class="st-row"><span class="st-k">Triangles</span><span class="st-v" id="stl-tris">—</span></div>
@@ -437,7 +437,7 @@ html, body { height: 100%; overflow: hidden; background: var(--ui-bg1); color: v
             </div>
             <div style="margin-top:6px;">
               <div class="cb-label">OPACITY</div>
-              <input type="range" id="stl-opacity" min="5" max="100" value="25" style="width:100%;accent-color:var(--teal);">
+              <input type="range" id="stl-opacity" min="5" max="100" value="55" style="width:100%;accent-color:var(--teal);">
             </div>
             <div style="margin-top:4px;">
               <div class="cb-label">COLOR</div>
@@ -1895,16 +1895,17 @@ async function loadPrinterJson(basePath){
                         : groupId === 'bed'        ? bedGroup
                         :                           frameGroup;
 
-      // Builder exports world-space positions. Convert to group-local space
-      // by subtracting the group's home-position offset (at x=0,y=0,z=0).
-      // home: yGantryGroup.z = -(0+offY) = -offY → subtract -offY → add offY
-      //       toolheadGroup.x = 0+offX = offX → subtract offX
-      //       bedGroup.y = 0 → no adjustment
+      // Builder exports world-space positions (bed-centre relative).
+      // Convert to group-local space by subtracting group's home world position.
+      // At machine home (x=0,y=0,z=0):
+      //   yGantryGroup world pos: z = -(0 + offY) = -offY = +117.5
+      //   toolheadGroup world pos: x = 0 + offX = -117.5, inherits gantry z
+      //   bedGroup/frameGroup: at world [0,0,0] → no correction
       if(groupId === 'y_gantry'){
-        wrapper.position.z += originOffset[1]; // undo gantry home Z offset
+        wrapper.position.z += originOffset[1]; // local.z = world.z - (-offY) = world.z + offY
       } else if(groupId === 'toolhead'){
-        wrapper.position.x -= originOffset[0]; // undo toolhead home X offset
-        wrapper.position.z += originOffset[1]; // undo gantry home Z offset (inherited)
+        wrapper.position.x -= originOffset[0]; // local.x = world.x - offX
+        wrapper.position.z += originOffset[1]; // local.z = world.z + offY (gantry inherited)
       }
 
       targetGroup.add(wrapper);
