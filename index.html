@@ -274,10 +274,13 @@ html, body { height: 100%; overflow: hidden; background: var(--ui-bg1); color: v
       <div class="chip-group">
         <label class="chip"     id="chip-st"><input type="checkbox" id="st"><span class="dot" style="background:var(--ax-b)"></span>TRVL</label>
         <label class="chip"     id="chip-gh"><input type="checkbox" id="gh"><span class="dot" style="background:var(--text3)"></span>PART</label>
+        <label class="chip"     id="chip-stl" title="Load STL file for printer part overlay"><input type="checkbox" id="stl-toggle"><span class="dot" style="background:var(--teal)"></span>STL</label>
       </div>
     </div>
 
     <div class="tb-spacer"></div>
+    <!-- Hidden STL file input -->
+    <input type="file" id="stl-file-input" accept=".stl" style="display:none;">
 
     <div id="conn-pill">
       <div id="conn-dot"></div>
@@ -422,6 +425,32 @@ html, body { height: 100%; overflow: hidden; background: var(--ui-bg1); color: v
           </div>
         </div>
 
+        <!-- STL overlay -->
+        <div class="ps" style="margin-top:0;">
+          <div class="ps-head">STL OVERLAY</div>
+          <div class="ps-body">
+            <div class="st-row"><span class="st-k">File</span><span class="st-v" id="stl-name" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;">—</span></div>
+            <div class="st-row"><span class="st-k">Triangles</span><span class="st-v" id="stl-tris">—</span></div>
+            <div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap;">
+              <button class="tb-btn" id="stl-load-btn" style="font-size:10px;height:26px;padding:0 8px;">📂 LOAD STL</button>
+              <button class="tb-btn danger" id="stl-clear-btn" style="font-size:10px;height:26px;padding:0 8px;display:none;">✕ CLEAR</button>
+            </div>
+            <div style="margin-top:6px;">
+              <div class="cb-label">OPACITY</div>
+              <input type="range" id="stl-opacity" min="5" max="100" value="25" style="width:100%;accent-color:var(--teal);">
+            </div>
+            <div style="margin-top:4px;">
+              <div class="cb-label">COLOR</div>
+              <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:3px;" id="stl-color-swatches">
+                <button class="tb-btn active" data-color="0x44aacc" style="font-size:9px;height:22px;padding:0 6px;background:rgba(68,170,204,0.18);border-color:rgba(68,170,204,0.6);color:var(--teal);">TEAL</button>
+                <button class="tb-btn" data-color="0xcccccc" style="font-size:9px;height:22px;padding:0 6px;">GREY</button>
+                <button class="tb-btn" data-color="0xf59e0b" style="font-size:9px;height:22px;padding:0 6px;">AMBER</button>
+                <button class="tb-btn" data-color="0xef4444" style="font-size:9px;height:22px;padding:0 6px;">RED</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
 
@@ -429,6 +458,65 @@ html, body { height: 100%; overflow: hidden; background: var(--ui-bg1); color: v
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ── Minimal STLLoader (ASCII + Binary) ──────────────────────────────────────
+THREE.STLLoader = function(manager){ this.manager = manager || THREE.DefaultLoadingManager; };
+THREE.STLLoader.prototype = {
+  constructor: THREE.STLLoader,
+  load: function(url, onLoad, onProgress, onError){
+    const loader = new THREE.FileLoader(this.manager);
+    loader.setResponseType('arraybuffer');
+    loader.load(url, buf => onLoad(this.parse(buf)), onProgress, onError);
+  },
+  parse: function(data){
+    const binLen = data.byteLength;
+    if(binLen >= 84){
+      const hdr = new DataView(data, 0, 80);
+      let solid = true;
+      for(let i=0;i<80;i++){ if(hdr.getUint8(i) === 0){ solid = false; break; } }
+      const ascii = new Uint8Array(data, 0, Math.min(256, binLen));
+      const tag = String.fromCharCode(...ascii).trimStart();
+      if(tag.startsWith('solid') && solid){
+        try { const g = this._parseASCII(new TextDecoder().decode(data)); if(g.attributes.position.count>0) return g; } catch(e){}
+      }
+      return this._parseBinary(data);
+    }
+    return this._parseASCII(new TextDecoder().decode(data));
+  },
+  _parseBinary: function(data){
+    const view = new DataView(data);
+    const nTri = view.getUint32(80, true);
+    const pos  = new Float32Array(nTri * 9);
+    const norm = new Float32Array(nTri * 9);
+    let p = 84;
+    for(let i=0;i<nTri;i++){
+      const nx=view.getFloat32(p,true),ny=view.getFloat32(p+4,true),nz=view.getFloat32(p+8,true); p+=12;
+      for(let v=0;v<3;v++){
+        const bi=i*9+v*3;
+        pos[bi]=view.getFloat32(p,true);pos[bi+1]=view.getFloat32(p+4,true);pos[bi+2]=view.getFloat32(p+8,true);p+=12;
+        norm[bi]=nx;norm[bi+1]=ny;norm[bi+2]=nz;
+      }
+      p+=2;
+    }
+    const geo=new THREE.BufferGeometry();
+    geo.setAttribute('position',new THREE.BufferAttribute(pos,3));
+    geo.setAttribute('normal',  new THREE.BufferAttribute(norm,3));
+    return geo;
+  },
+  _parseASCII: function(text){
+    const verts=[];
+    const re=/facet\s+normal\s+([\d.eE+\-]+)\s+([\d.eE+\-]+)\s+([\d.eE+\-]+)[\s\S]*?vertex\s+([\d.eE+\-]+)\s+([\d.eE+\-]+)\s+([\d.eE+\-]+)[\s\S]*?vertex\s+([\d.eE+\-]+)\s+([\d.eE+\-]+)\s+([\d.eE+\-]+)[\s\S]*?vertex\s+([\d.eE+\-]+)\s+([\d.eE+\-]+)\s+([\d.eE+\-]+)/gm;
+    let m;
+    while((m=re.exec(text))!==null){
+      for(let i=4;i<=12;i++) verts.push(parseFloat(m[i]));
+    }
+    const geo=new THREE.BufferGeometry();
+    geo.setAttribute('position',new THREE.BufferAttribute(new Float32Array(verts),3));
+    geo.computeVertexNormals();
+    return geo;
+  }
+};
+</script>
 <script>
 'use strict';
 
@@ -647,13 +735,21 @@ document.querySelectorAll('.chip').forEach(chip => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// KINEMATICS — CoreXY-BC (same as main sim)
-// B rotates bed around X, C is continuous rotation around Z (ignored for trail)
-// For 3-axis printers B=0, C=0 → identity, everything works.
+// KINEMATICS — driven by printer.json, falls back to CoreXY-BC default
 // ═══════════════════════════════════════════════════════════════════════════
-const BED_ROT_AXES = [
+
+// Axis → Three.js rotation axis vector (machine frame, Y-up scene)
+// B tilts around X (bed tips forward), C rotates around Y (vertical)
+const AXIS_VECTORS = {
+  A: [1,0,0], B: [1,0,0], C: [0,1,0],
+  X: [1,0,0], Y: [0,0,1], Z: [0,1,0]
+};
+// Which axes on the bed node are rotary (affect bed quaternion)
+const ROTARY_AXES = new Set(['A','B','C']);
+
+// Default until printer.json overrides
+let BED_ROT_AXES = [
   { gcode: 'b', axis: [1,0,0], invert: false }
-  // C is typically the continuous rotation axis — optional to add
 ];
 
 function calcBedQuat(b, c){
@@ -813,6 +909,10 @@ function refreshVisibility(){
   if(ghostLineT) ghostLineT.visible = showT;
   if(ghostRem3)  ghostRem3.visible  = showPart;
   if(ghostRem5)  ghostRem5.visible  = showPart;
+  // STL overlay — both printer.json meshes and legacy single mesh
+  const showSTL = document.getElementById('stl-toggle').checked;
+  printerMeshes.forEach(({mesh})=>{ mesh.visible = showSTL; });
+  if(stlMesh) stlMesh.visible = showSTL;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1647,13 +1747,271 @@ async function startup(){
       if(cfg.moonraker){
         document.getElementById('ws-input').value = cfg.moonraker;
         connect(cfg.moonraker);
-        return;
       }
+
+      // Auto-load STL if provided (legacy single-file)
+      if(cfg.stl_url){
+        loadSTLFromUrl(cfg.stl_url);
+      }
+
+      // printer.json — try same directory as config.json
+      // cfg.printer_path lets you point to a subfolder e.g. "./printer/"
+      const printerBase = cfg.printer_path ? cfg.printer_path.replace(/\/?$/, '/') : './';
+      await loadPrinterJson(printerBase);
+
+      if(cfg.moonraker) return;
     }
   } catch(e){ /* config.json absent or invalid — fall through */ }
 
   // 3 — nothing found, show overlay
   showOverlay();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PRINTER.JSON — multi-part machine model
+// ═══════════════════════════════════════════════════════════════════════════
+let printerMeshes = []; // { mesh, nodeId, group:'bed'|'static'|'toolhead' }
+let printerNodes  = []; // kinematic_nodes from printer.json
+
+// Map a kinematic node to one of our Three.js groups based on its axis chain
+function nodeToGroup(node, allNodes){
+  // Walk up to root collecting all axes
+  const axes = [];
+  let cur = node;
+  while(cur){ axes.push(...(cur.axes||[])); cur = allNodes.find(n=>n.id===cur.parent)||null; }
+  const axNames = axes.map(a=>a.axis.toUpperCase());
+  // Has any rotary axis (A/B/C) → bed group (tilts with bed kinematics)
+  if(axNames.some(a=>ROTARY_AXES.has(a))) return 'bed';
+  // Has X or Y linear → toolhead group (follows nozzle XY)
+  if(axNames.includes('X')||axNames.includes('Y')) return 'toolhead';
+  // Pure Z or nothing → static
+  return 'static';
+}
+
+function stlToThreeCoords(geo){
+  // Machine: X=right, Y=front, Z=up  →  Three: X=right, Y=up, Z=-front
+  const arr = geo.attributes.position.array;
+  for(let i=0;i<arr.length;i+=3){
+    const x=arr[i],y=arr[i+1],z=arr[i+2];
+    arr[i]=x; arr[i+1]=z; arr[i+2]=-y;
+  }
+  geo.attributes.position.needsUpdate=true;
+  geo.computeVertexNormals();
+  return geo;
+}
+
+function hexInt(h){ return parseInt((h||'#888888').replace('#',''),16); }
+
+async function loadPrinterJson(basePath){
+  clearPrinterMeshes();
+  let json;
+  try {
+    const res = await fetch(basePath + 'printer.json', {cache:'no-cache'});
+    if(!res.ok) return false;
+    json = await res.json();
+  } catch(e){ return false; }
+
+  printerNodes = json.kinematic_nodes || [];
+
+  // Derive BED_ROT_AXES from the node that has B/C in its chain
+  const bedNode = printerNodes.find(n=>(n.axes||[]).some(a=>ROTARY_AXES.has(a.axis.toUpperCase())));
+  if(bedNode){
+    BED_ROT_AXES = (bedNode.axes||[])
+      .filter(a=>ROTARY_AXES.has(a.axis.toUpperCase()))
+      .map(a=>({
+        gcode: a.axis.toLowerCase(),
+        axis:  AXIS_VECTORS[a.axis.toUpperCase()] || [1,0,0],
+        invert: a.invert||false
+      }));
+  }
+
+  // Load each part STL
+  const parts = json.parts || [];
+  const showSTL = document.getElementById('stl-toggle').checked;
+
+  for(const part of parts){
+    if(!part.file) continue;
+    try {
+      const res = await fetch(basePath + part.file, {cache:'no-cache'});
+      if(!res.ok) continue;
+      const buf = await res.arrayBuffer();
+      const loader = new THREE.STLLoader();
+      const geo = stlToThreeCoords(loader.parse(buf));
+
+      const mat = new THREE.MeshLambertMaterial({
+        color: hexInt(part.color), transparent: true,
+        opacity: part.opacity ?? 0.35,
+        side: THREE.DoubleSide, depthWrite: false
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.frustumCulled = false;
+
+      // Apply position + rotation from printer.json (machine coords)
+      const pos = part.position||[0,0,0];
+      const rot = part.rotation||[0,0,0];
+      mesh.position.set(pos[0], pos[2], -pos[1]);
+      mesh.rotation.set(rot[0]*Math.PI/180, rot[2]*Math.PI/180, -rot[1]*Math.PI/180);
+
+      // Assign to correct Three.js group
+      const node = printerNodes.find(n=>n.id===part.node);
+      const grp  = node ? nodeToGroup(node, printerNodes) : 'static';
+      if(grp==='bed')      bedGroup.add(mesh);
+      else if(grp==='toolhead') staticGroup.add(mesh); // will be moved to nozzleGrp later if needed
+      else                 staticGroup.add(mesh);
+
+      mesh.visible = showSTL;
+      printerMeshes.push({mesh, nodeId:part.node, group:grp, label:part.label||part.file});
+    } catch(e){ console.warn('Failed to load STL:', part.file, e); }
+  }
+
+  // Update STL panel info
+  if(printerMeshes.length){
+    document.getElementById('stl-name').textContent = json.printer_name || `${printerMeshes.length} parts`;
+    document.getElementById('stl-tris').textContent = printerMeshes.length + ' parts';
+    document.getElementById('stl-clear-btn').style.display = '';
+    const cb = document.getElementById('stl-toggle');
+    cb.checked = true;
+    document.getElementById('chip-stl').classList.add('on');
+  }
+
+  return true;
+}
+
+function clearPrinterMeshes(){
+  printerMeshes.forEach(({mesh, group})=>{
+    const grp = group==='bed' ? bedGroup : staticGroup;
+    grp.remove(mesh);
+    mesh.geometry.dispose();
+    mesh.material.dispose();
+  });
+  printerMeshes = [];
+  printerNodes  = [];
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LEGACY SINGLE-STL OVERLAY (manual load, fallback when no printer.json)
+// ═══════════════════════════════════════════════════════════════════════════
+let stlMesh = null;
+let stlColor = 0x44aacc;
+let stlOpacity = 0.25;
+
+function loadSTLBuffer(buffer, filename){
+  const loader = new THREE.STLLoader();
+  const geo = loader.parse(buffer);
+  applySTLGeo(geo, filename);
+}
+
+function applySTLGeo(geo, filename){
+  clearSTL();
+  // Centre geometry on bed surface (Y=0 in Three.js = bed surface)
+  geo.computeBoundingBox();
+  const box = geo.boundingBox;
+  const cx = (box.min.x + box.max.x) / 2;
+  const cy = (box.min.y + box.max.y) / 2;
+  const cz = (box.min.z + box.max.z) / 2;
+  // STL is typically Z-up; Three.js scene is Y-up.
+  // Apply same coordinate transform used for print path: X→X, Z→Y, -Y→Z
+  // We do this by rotating the geometry: swap Y/Z, flip Z
+  const pos = geo.attributes.position.array;
+  for(let i = 0; i < pos.length; i += 3){
+    const ox = pos[i] - cx, oy = pos[i+1] - cy, oz = pos[i+2] - cz;
+    pos[i]   = ox;       // X stays
+    pos[i+1] = oz;       // Z→Y (up)
+    pos[i+2] = -oy;      // -Y→Z (depth)
+  }
+  geo.attributes.position.needsUpdate = true;
+  geo.computeVertexNormals();
+  geo.computeBoundingBox();
+  // Lift so bottom of part sits at Y=0 (bed surface)
+  const minY = geo.boundingBox.min.y;
+  const posArr = geo.attributes.position.array;
+  for(let i = 1; i < posArr.length; i += 3) posArr[i] -= minY;
+  geo.attributes.position.needsUpdate = true;
+  geo.computeBoundingBox();
+
+  const mat = new THREE.MeshLambertMaterial({
+    color: stlColor, transparent: true, opacity: stlOpacity,
+    side: THREE.DoubleSide, depthWrite: false
+  });
+  stlMesh = new THREE.Mesh(geo, mat);
+  stlMesh.frustumCulled = false;
+  // Visibility follows the STL chip toggle
+  stlMesh.visible = document.getElementById('stl-toggle').checked;
+  bedGroup.add(stlMesh);
+
+  // Update panel
+  const tris = geo.attributes.position.count / 3;
+  document.getElementById('stl-name').textContent = filename || 'loaded';
+  document.getElementById('stl-tris').textContent = tris.toLocaleString();
+  document.getElementById('stl-clear-btn').style.display = '';
+
+  // Turn chip on
+  const cb = document.getElementById('stl-toggle');
+  cb.checked = true;
+  document.getElementById('chip-stl').classList.add('on');
+}
+
+function clearSTL(){
+  // Clear printer.json multi-mesh
+  clearPrinterMeshes();
+  // Clear legacy single mesh
+  if(stlMesh){
+    bedGroup.remove(stlMesh);
+    stlMesh.geometry.dispose();
+    stlMesh.material.dispose();
+    stlMesh = null;
+  }
+  document.getElementById('stl-name').textContent = '—';
+  document.getElementById('stl-tris').textContent = '—';
+  document.getElementById('stl-clear-btn').style.display = 'none';
+  const cb = document.getElementById('stl-toggle');
+  cb.checked = false;
+  document.getElementById('chip-stl').classList.remove('on');
+}
+
+// File input → load STL
+document.getElementById('stl-file-input').addEventListener('change', function(){
+  const file = this.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = e => loadSTLBuffer(e.target.result, file.name);
+  reader.readAsArrayBuffer(file);
+  this.value = '';
+});
+
+// "LOAD STL" button
+document.getElementById('stl-load-btn').addEventListener('click', () => {
+  document.getElementById('stl-file-input').click();
+});
+
+// "CLEAR" button
+document.getElementById('stl-clear-btn').addEventListener('click', clearSTL);
+
+// STL chip toggle — show/hide mesh
+// Opacity slider
+document.getElementById('stl-opacity').addEventListener('input', function(){
+  stlOpacity = parseInt(this.value) / 100;
+  if(stlMesh) stlMesh.material.opacity = stlOpacity;
+});
+
+// Color swatches
+document.getElementById('stl-color-swatches').addEventListener('click', e => {
+  const btn = e.target.closest('[data-color]');
+  if(!btn) return;
+  document.querySelectorAll('#stl-color-swatches [data-color]').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  stlColor = parseInt(btn.dataset.color, 16);
+  if(stlMesh) stlMesh.material.color.setHex(stlColor);
+});
+
+// config.json stl_url support — called from startup()
+async function loadSTLFromUrl(url){
+  try {
+    const res = await fetch(url);
+    if(!res.ok) return;
+    const buf = await res.arrayBuffer();
+    loadSTLBuffer(buf, url.split('/').pop());
+  } catch(e){ console.warn('STL auto-load failed:', e); }
 }
 
 startup();
