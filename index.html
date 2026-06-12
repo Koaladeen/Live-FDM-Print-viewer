@@ -1872,30 +1872,39 @@ async function loadPrinterJson(basePath){
       const buf = await res.arrayBuffer();
       const geo = (new THREE.STLLoader()).parse(buf);
       const mat = new THREE.MeshLambertMaterial({
-        color: hexInt(part.color), transparent: true,
+        color: hexInt(part.color), transparent: part.opacity < 1,
         opacity: part.opacity ?? 0.55,
         side: THREE.DoubleSide, depthWrite: true
       });
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.frustumCulled = false;
 
-      // STL Z-up → Three.js Y-up
-      mesh.rotation.x = -Math.PI / 2;
-
-      // Position from builder (machine coords, Z-up)
+      // Match builder exactly — wrapper handles position/rotation in machine coords,
+      // inner mesh handles Z-up → Y-up base conversion only
+      const wrapper = new THREE.Group();
       const pos = part.position || [0,0,0];
-      mesh.position.set(pos[0], pos[2], pos[1]);
+      const rot = part.rotation || [0,0,0];
+      wrapper.position.set(pos[0], pos[2], pos[1]);
+      wrapper.rotation.set(
+        rot[0] * Math.PI/180,
+        rot[2] * Math.PI/180,
+        rot[1] * Math.PI/180
+      );
+
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.rotation.x = -Math.PI / 2; // Z-up → Y-up only
+      mesh.frustumCulled = false;
+      mesh.renderOrder = -1; // render behind trail geometry
+      wrapper.add(mesh);
 
       // Route to correct group
       const groupId = part.group || 'frame';
-      const targetGroup = groupId === 'y_gantry'  ? yGantryGroup
+      const targetGroup = groupId === 'y_gantry' ? yGantryGroup
                         : groupId === 'toolhead'  ? toolheadGroup
-                        : groupId === 'bed'       ? bedGroup
+                        : groupId === 'bed'        ? bedGroup
                         :                           frameGroup;
-      targetGroup.add(mesh);
+      targetGroup.add(wrapper);
 
-      mesh.visible = showSTL;
-      printerMeshes.push({mesh, groupId, label:part.label||part.file});
+      wrapper.visible = showSTL;
+      printerMeshes.push({mesh:wrapper, groupId, label:part.label||part.file});
     } catch(e){ console.warn('Failed to load STL:', part.file, e); }
   }
 
@@ -1913,14 +1922,13 @@ async function loadPrinterJson(basePath){
 }
 
 function clearPrinterMeshes(){
-  printerMeshes.forEach(({mesh, groupId})=>{
+  printerMeshes.forEach(({mesh:wrapper, groupId})=>{
     const grp = groupId==='y_gantry' ? yGantryGroup
               : groupId==='toolhead' ? toolheadGroup
               : groupId==='bed'      ? bedGroup
               :                        frameGroup;
-    grp.remove(mesh);
-    mesh.geometry.dispose();
-    mesh.material.dispose();
+    grp.remove(wrapper);
+    wrapper.traverse(c=>{ if(c.geometry) c.geometry.dispose(); if(c.material) c.material.dispose(); });
   });
   printerMeshes.length = 0;
   printerLoaded = false;
