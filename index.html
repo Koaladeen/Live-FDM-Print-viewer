@@ -601,9 +601,9 @@ let printerLoaded = false;
 
 function updateCoreXYGroups(x, y, z){
   yGantryGroup.position.z  =  (y + originOffset[1]); // Y → Three.js +Z
-  toolheadGroup.position.x =   x + originOffset[0];  // X → Three.js X
+  toolheadGroup.position.x = -(x + originOffset[0]); // X → Three.js -X (flip to match machine)
   toolheadGroup.position.y = 0;
-  bedGroup.position.set(0, -z, 0);                   // Z lifts bed down
+  bedGroup.position.set(originOffset[0], -z, -originOffset[1]); // bed centred + Z lift
 }
 
 // Legacy bed quaternion for B/C (kept for toPart() trail transform)
@@ -1205,9 +1205,9 @@ function applyGhostProgress(filePos){
   // Update nozzle to end position of current move
   const m = ghostMoves[Math.max(0, moveIdx-1)];
   if(m){
-    // s1 already has originOffset baked in from buildGhost parser
     const [px,py,pz] = m.s1;
-    staticGroup.position.set(px, pz, -py);
+    // px/py already have originOffset baked in from parser
+    updateCoreXYGroups(px - originOffset[0], py - originOffset[1], pz);
   }
 
   currentLayer = 0;
@@ -1324,12 +1324,9 @@ function pbFrame(now){
     const t = moveDur > 0 ? Math.min(1, (pbElapsed - moveStart) / moveDur) : 1;
     const [x0,y0,z0] = curMove.s0;
     const [x1,y1,z1] = curMove.s1;
-    staticGroup.position.set(
-      x0 + (x1-x0)*t,
-      z0 + (z1-z0)*t,
-      -(y0 + (y1-y0)*t)
-    );
-    updateCoreXYGroups(x0+(x1-x0)*t, y0+(y1-y0)*t, z0+(z1-z0)*t);
+    const xi = x0+(x1-x0)*t, yi = y0+(y1-y0)*t, zi = z0+(z1-z0)*t;
+    // x0/y0 have originOffset baked in — strip it back out for updateCoreXYGroups
+    updateCoreXYGroups(xi - originOffset[0], yi - originOffset[1], zi);
   }
 
   // Sync correction every SYNC_INTERVAL ms
