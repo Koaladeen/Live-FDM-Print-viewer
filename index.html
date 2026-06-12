@@ -579,12 +579,103 @@ scene.add(dirL);
 const rootGroup = new THREE.Group();
 scene.add(rootGroup);
 
-const bedGroup    = new THREE.Group();
-const staticGroup = new THREE.Group(); // moves with XY (toolhead carrier)
-const frameGroup  = new THREE.Group(); // never moves (frame, columns)
+// Static frame group — always exists, never moves
+const frameGroup = new THREE.Group();
+rootGroup.add(frameGroup);
+
+// Kinematic node groups — built dynamically from printer.json
+// nodeGroups[nodeId] = THREE.Group
+// Falls back to legacy bedGroup/staticGroup when no printer.json loaded
+let nodeGroups = {};
+
+// Legacy groups (used when no printer.json, and for buildplate/grid/trail)
+const bedGroup    = new THREE.Group(); // Z + B/C (bed kinematics)
+const staticGroup = new THREE.Group(); // XY (toolhead)
 rootGroup.add(bedGroup);
 rootGroup.add(staticGroup);
-rootGroup.add(frameGroup);
+
+// Build kinematic group tree from printer.json nodes
+// Called after loadPrinterJson sets printerNodes
+function buildNodeGroups(){
+  // Remove old node groups from scene
+  Object.values(nodeGroups).forEach(g => {
+    if(g.parent) g.parent.remove(g);
+  });
+  nodeGroups = {};
+
+  if(!printerNodes.length) return;
+
+  // Create a group for each node
+  printerNodes.forEach(n => {
+    nodeGroups[n.id] = new THREE.Group();
+    nodeGroups[n.id].userData.nodeId = n.id;
+    nodeGroups[n.id].userData.axes   = n.axes || [];
+  });
+
+  // Build parent-child hierarchy
+  printerNodes.forEach(n => {
+    const grp = nodeGroups[n.id];
+    if(n.parent && nodeGroups[n.parent]){
+      nodeGroups[n.parent].add(grp);
+    } else {
+      // Root node — attach to frameGroup
+      frameGroup.add(grp);
+    }
+  });
+}
+
+// Update all node group transforms from current printer state
+function updateNodeGroups(state){
+  if(!printerNodes.length) return;
+
+  // Map axis name → current machine position value
+  const axisVal = {
+    X: (state.x || 0) + originOffset[0],
+    Y: state.y || 0,
+    Z: state.z || 0,
+    A: state.a || 0,
+    B: state.b || 0,
+    C: state.c || 0,
+  };
+
+  printerNodes.forEach(n => {
+    const grp = nodeGroups[n.id];
+    if(!grp) return;
+    const axes = n.axes || [];
+
+    // Reset transform for this node
+    grp.position.set(0, 0, 0);
+    grp.quaternion.identity();
+
+    // Apply each axis in order
+    axes.forEach(a => {
+      const ax = a.axis.toUpperCase();
+      const val = axisVal[ax] || 0;
+      const inv = a.invert ? -1 : 1;
+
+      if(ax === 'X'){
+        grp.position.x += ((state.x||0) + originOffset[0]) * inv;
+      } else if(ax === 'Y'){
+        // Machine Y → Three.js -Z
+        grp.position.z += -((state.y||0) + originOffset[1]) * inv;
+      } else if(ax === 'Z'){
+        grp.position.y += (state.z||0) * inv;
+      } else if(ax === 'A' || ax === 'B'){
+        // Rotation around X axis (tilt)
+        const q = new THREE.Quaternion().setFromAxisAngle(
+          new THREE.Vector3(1,0,0), (val * inv) * Math.PI/180
+        );
+        grp.quaternion.multiply(q);
+      } else if(ax === 'C'){
+        // Rotation around Y axis (spin)
+        const q = new THREE.Quaternion().setFromAxisAngle(
+          new THREE.Vector3(0,1,0), (val * inv) * Math.PI/180
+        );
+        grp.quaternion.multiply(q);
+      }
+    });
+  });
+}
 
 // Buildplate
 const bpGeo = new THREE.BoxGeometry(275, 3, 275);
@@ -1684,6 +1775,9 @@ function updateUI(){
   }
   updateBedFromPos(p.z, p.b, p.c);
 
+  // Kinematic node groups — update all node transforms from printer.json
+  if(printerNodes.length) updateNodeGroups(p);
+
   // Corner right
   document.getElementById('cr-moves').textContent = totalMoves.toLocaleString() + ' moves';
   document.getElementById('cr-layer').textContent = 'layer ' + (currentLayer || '—');
@@ -1873,6 +1967,9 @@ async function loadPrinterJson(basePath){
       }));
   }
 
+  // Build kinematic group hierarchy
+  buildNodeGroups();
+
   // Load each part STL
   const parts = json.parts || [];
   const showSTL = document.getElementById('stl-toggle').checked;
@@ -1888,42 +1985,28 @@ async function loadPrinterJson(basePath){
 
       const mat = new THREE.MeshLambertMaterial({
         color: hexInt(part.color), transparent: true,
-        opacity: part.opacity ?? 0.35,
+        opacity: part.opacity ?? 0.55,
         side: THREE.DoubleSide, depthWrite: true
       });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.frustumCulled = false;
 
-      // Apply position + rotation from printer.json (machine coords)
+      // Position is in machine coords relative to world origin (bed centre)
+      // Each node group handles its own kinematic offset, so parts just need
+      // their static offset from the node's local origin
       const pos = part.position||[0,0,0];
       const rot = part.rotation||[0,0,0];
-      const node2 = printerNodes.find(n=>n.id===part.node);
-      const grp2  = node2 ? nodeToGroup(node2, printerNodes) : 'frame';
-
-      // frame parts: offset by originOffset so bed-centre = world origin
-      // bed parts: already in bed-relative coords, offset by originOffset
-      // toolhead parts: relative to nozzle tip — no originOffset needed
-      //   (staticGroup position IS the nozzle, so mesh offset is from nozzle)
-      if(grp2 === 'toolhead'){
-        mesh.position.set(pos[0], pos[2], -pos[1]);
-      } else {
-        mesh.position.set(
-          pos[0] + originOffset[0],
-          pos[2],
-          -(pos[1] + originOffset[1])
-        );
-      }
+      mesh.position.set(pos[0], pos[2], -pos[1]);
       mesh.rotation.set(rot[0]*Math.PI/180, rot[2]*Math.PI/180, -rot[1]*Math.PI/180);
 
-      // Assign to correct Three.js group
-      const node = printerNodes.find(n=>n.id===part.node);
-      const grp  = node ? nodeToGroup(node, printerNodes) : 'frame';
-      if(grp==='bed')           bedGroup.add(mesh);
-      else if(grp==='toolhead') staticGroup.add(mesh);
-      else                      frameGroup.add(mesh); // 'frame' — never moves
+      // Assign to node group — falls back to frameGroup if node not found
+      const targetGroup = nodeGroups[part.node] || frameGroup;
+      targetGroup.add(mesh);
 
       mesh.visible = showSTL;
-      printerMeshes.push({mesh, nodeId:part.node, group:grp, label:part.label||part.file});
+      printerMeshes.push({mesh, nodeId:part.node, label:part.label||part.file});
+    } catch(e){ console.warn('Failed to load STL:', part.file, e); }
+  }
     } catch(e){ console.warn('Failed to load STL:', part.file, e); }
   }
 
@@ -1941,14 +2024,17 @@ async function loadPrinterJson(basePath){
 }
 
 function clearPrinterMeshes(){
-  printerMeshes.forEach(({mesh, group})=>{
-    const grp = group==='bed' ? bedGroup : group==='toolhead' ? staticGroup : frameGroup;
+  printerMeshes.forEach(({mesh, nodeId})=>{
+    const grp = nodeGroups[nodeId] || frameGroup;
     grp.remove(mesh);
     mesh.geometry.dispose();
     mesh.material.dispose();
   });
   printerMeshes = [];
   printerNodes  = [];
+  // Tear down node groups
+  Object.values(nodeGroups).forEach(g => { if(g.parent) g.parent.remove(g); });
+  nodeGroups = {};
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
