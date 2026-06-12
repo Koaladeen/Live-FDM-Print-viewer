@@ -1887,9 +1887,14 @@ async function loadPrinterJson(basePath){
       mesh.frustumCulled = false;
 
       // Apply position + rotation from printer.json (machine coords)
+      // originOffset shifts machine origin (front-left corner) to bed centre
       const pos = part.position||[0,0,0];
       const rot = part.rotation||[0,0,0];
-      mesh.position.set(pos[0], pos[2], -pos[1]);
+      mesh.position.set(
+        pos[0] + originOffset[0],
+        pos[2],
+        -(pos[1] + originOffset[1])
+      );
       mesh.rotation.set(rot[0]*Math.PI/180, rot[2]*Math.PI/180, -rot[1]*Math.PI/180);
 
       // Assign to correct Three.js group
