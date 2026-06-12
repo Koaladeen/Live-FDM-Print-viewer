@@ -1927,22 +1927,23 @@ async function loadPrinterJson(basePath){
                         : groupId === 'bed'        ? bedGroup
                         :                           frameGroup;
 
-      // Builder exports world-space positions (bed-centre relative).
-      // Convert to group-local space by subtracting group's home world position.
-      // At machine home (x=0,y=0,z=0):
-      //   yGantryGroup world pos: z = -(0 + offY) = -offY = +117.5
-      //   toolheadGroup world pos: x = 0 + offX = -117.5, inherits gantry z
-      // Parts authored in world space (bed-centre). Convert to group-local space.
-      // yGantryGroup home z = -(0+offY) = +117.5  → local.z = world.z + offY
-      // toolheadGroup home x = offX = -117.5       → local.x = world.x - offX
-      console.log(`[STL] ${part.label} group=${groupId} pos before:`, wrapper.position.x.toFixed(1), wrapper.position.z.toFixed(1), 'offX=', originOffset[0], 'offY=', originOffset[1]);
+      // Parts are authored in world space (bed-centre = 0,0,0).
+      // No group-local correction needed — parts sit at their authored world position.
+      // The groups are offset by originOffset in updateCoreXYGroups, so we pre-apply
+      // the inverse here so that at machine home (x=0,y=0) parts appear at correct world pos.
+      // At home: toolheadGroup.x = offX, yGantryGroup.z = -offY
+      // We want part world pos = authored pos, so local = authored - group_home_pos
+      // toolhead: local.x = authored.x - offX,  local.z = authored.z - (-offY) = authored.z + offY
+      // y_gantry: local.z = authored.z + offY (inherits gantry z only)
+      // BUT this only works if machine is at home. When machine moves to x=mx:
+      //   group.x = mx + offX → world.x = mx + offX + local.x = mx + offX + authored.x - offX = mx + authored.x
+      // That means part moves with nozzle X offset by authored.x ✓ — correct!
       if(groupId === 'y_gantry'){
-        wrapper.position.z += originOffset[1];
+        wrapper.position.z += originOffset[1]; // local.z = world.z + offY
       } else if(groupId === 'toolhead'){
-        wrapper.position.x -= originOffset[0];
-        wrapper.position.z += originOffset[1];
+        wrapper.position.x -= originOffset[0]; // local.x = world.x - offX = world.x + 90
+        wrapper.position.z += originOffset[1]; // local.z = world.z + offY
       }
-      console.log(`[STL] ${part.label} pos after:`, wrapper.position.x.toFixed(1), wrapper.position.z.toFixed(1));
 
       targetGroup.add(wrapper);
 
