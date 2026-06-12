@@ -868,14 +868,13 @@ let ghostLineSegs = []; // flat list of travel seg endpoints for draw range scru
 let ghostMode = false; // true = scrub ghost instead of accumulating live trail
 
 function newChunk(){
-  const mat3 = new THREE.MeshLambertMaterial({ color: 0x3b82f6 });
-  const mat5 = new THREE.MeshLambertMaterial({ color: 0xef4444 });
+  const mat3 = new THREE.MeshLambertMaterial({ color: 0xffffff });
+  const mat5 = new THREE.MeshLambertMaterial({ color: 0xffffff });
   const m3 = new THREE.InstancedMesh(cylGeo, mat3, TRAIL_CHUNK);
   const m5 = new THREE.InstancedMesh(cylGeo, mat5, TRAIL_CHUNK);
   m3.count = 0; m5.count = 0;
   m3.frustumCulled = false; m5.frustumCulled = false;
   bedGroup.add(m3); bedGroup.add(m5);
-  // Sphere caps to fill gaps between cylinders
   const sphGeo = new THREE.SphereGeometry(NOZZLE_DIA/2, 6, 4);
   const sp3 = new THREE.InstancedMesh(sphGeo, mat3, TRAIL_CHUNK);
   const sp5 = new THREE.InstancedMesh(sphGeo, mat5, TRAIL_CHUNK);
@@ -897,7 +896,7 @@ function newChunk(){
   return chunk;
 }
 
-function appendSeg(s0, s1, is5ax, isTravel){
+function appendSeg(s0, s1, is5ax, isTravel, tool){
   if(!currentChunk || (currentChunk.count3 + currentChunk.count5 >= TRAIL_CHUNK && !isTravel) || currentChunk.countT >= TRAIL_CHUNK)
     currentChunk = newChunk();
 
@@ -905,6 +904,7 @@ function appendSeg(s0, s1, is5ax, isTravel){
   const v0 = new THREE.Vector3(x0, z0, -y0);
   const v1 = new THREE.Vector3(x1, z1, -y1);
   const len = v0.distanceTo(v1);
+  const col = new THREE.Color(toolColor(tool ?? 0));
 
   if(isTravel){
     const arr = currentChunk.meshT.geometry.attributes.position.array;
@@ -925,24 +925,30 @@ function appendSeg(s0, s1, is5ax, isTravel){
 
   if(is5ax){
     currentChunk.mesh5.setMatrixAt(currentChunk.count5, dummy.matrix);
+    currentChunk.mesh5.setColorAt(currentChunk.count5, col);
     currentChunk.count5++;
     currentChunk.mesh5.count = currentChunk.count5;
     currentChunk.mesh5.instanceMatrix.needsUpdate = true;
-    // Sphere cap at endpoint
+    if(currentChunk.mesh5.instanceColor) currentChunk.mesh5.instanceColor.needsUpdate = true;
     dummy.position.set(v1.x, v1.y, v1.z); dummy.scale.set(1,1,1); dummy.updateMatrix();
     currentChunk.sph5.setMatrixAt(currentChunk.count5-1, dummy.matrix);
+    currentChunk.sph5.setColorAt(currentChunk.count5-1, col);
     currentChunk.sph5.count = currentChunk.count5;
     currentChunk.sph5.instanceMatrix.needsUpdate = true;
+    if(currentChunk.sph5.instanceColor) currentChunk.sph5.instanceColor.needsUpdate = true;
   } else {
     currentChunk.mesh3.setMatrixAt(currentChunk.count3, dummy.matrix);
+    currentChunk.mesh3.setColorAt(currentChunk.count3, col);
     currentChunk.count3++;
     currentChunk.mesh3.count = currentChunk.count3;
     currentChunk.mesh3.instanceMatrix.needsUpdate = true;
-    // Sphere cap at endpoint
+    if(currentChunk.mesh3.instanceColor) currentChunk.mesh3.instanceColor.needsUpdate = true;
     dummy.position.set(v1.x, v1.y, v1.z); dummy.scale.set(1,1,1); dummy.updateMatrix();
     currentChunk.sph3.setMatrixAt(currentChunk.count3-1, dummy.matrix);
+    currentChunk.sph3.setColorAt(currentChunk.count3-1, col);
     currentChunk.sph3.count = currentChunk.count3;
     currentChunk.sph3.instanceMatrix.needsUpdate = true;
+    if(currentChunk.sph3.instanceColor) currentChunk.sph3.instanceColor.needsUpdate = true;
   }
 }
 
@@ -988,6 +994,17 @@ function refreshVisibility(){
 // ═══════════════════════════════════════════════════════════════════════════
 // GHOST PATH — pre-parsed G-code rendered faint
 // ═══════════════════════════════════════════════════════════════════════════
+// ── Filament tool colors ─────────────────────────────────────────────────
+const TOOL_COLORS = [
+  0xe87020, // T0 — orange (default)
+  0x3b82f6, // T1 — blue
+  0x22c55e, // T2 — green
+  0xef4444, // T3 — red
+  0xa855f7, // T4 — purple
+  0xeab308, // T5 — yellow
+];
+function toolColor(t){ return TOOL_COLORS[t % TOOL_COLORS.length]; }
+
 function buildGhost(text){
   clearGhost();
   // Minimal parser — same logic as main sim
@@ -996,7 +1013,8 @@ function buildGhost(text){
   let x=0,y=0,z=0,b=0,c=0,e=0;
   let absXYZ=true, absE=false;
   let feedrate=1000, accel=3000;
-  let firstExtrusionSeen=false; // lock absXYZ=true after first real extrusion move
+  let firstExtrusionSeen=false;
+  let currentTool=0; // active tool index
   // Build a byte offset map: byteOffsets[i] = byte position of start of line i
   // Moonraker's file_position is the byte offset of the line currently executing
   const byteOffsets = new Int32Array(lines.length);
@@ -1007,6 +1025,8 @@ function buildGhost(text){
     const lineByteStart = byteOffsets[li];
     const lu = raw.trim().toUpperCase();
     if(!lu || lu[0]===';') continue;
+    // Tool change
+    if(/^T\d+$/.test(lu)){ currentTool=parseInt(lu.slice(1)); continue; }
     if(lu.startsWith('M83')){ absE=false; continue; }
     if(lu.startsWith('M82')){ absE=true;  continue; }
     if(lu.startsWith('G90')){ absXYZ=true;  continue; }
@@ -1040,7 +1060,7 @@ function buildGhost(text){
     if(extruding) firstExtrusionSeen=true;
     // Skip all moves before first real extrusion (homing, probing, purge lines etc)
     if(!firstExtrusionSeen) continue;
-    moves.push({type,s0,s1,filePos:lineByteStart,mf:feedrate,maccel:accel});
+    moves.push({type,s0,s1,filePos:lineByteStart,mf:feedrate,maccel:accel,tool:currentTool});
   }
   ghostMoves = moves;
 
@@ -1063,21 +1083,24 @@ function buildGhost(text){
   const r = NOZZLE_DIA/2;
   const ghostCylGeo = new THREE.CylinderGeometry(r,r,1,5,1);
 
-  function makeGhostInstanced(segs, color){
+  function makeGhostInstanced(segs, fallbackColor){
     if(!segs.length) return null;
-    const mat = new THREE.MeshLambertMaterial({ color, transparent: false, opacity: 1.0 });
+    const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: false, opacity: 1.0 });
     const mesh = new THREE.InstancedMesh(ghostCylGeo, mat, segs.length);
+    const col = new THREE.Color();
     for(let i=0;i<segs.length;i++){
       const [x0,y0,z0]=segs[i].s0,[x1,y1,z1]=segs[i].s1;
       const v0=new THREE.Vector3(x0,z0,-y0),v1=new THREE.Vector3(x1,z1,-y1);
       const len=v0.distanceTo(v1);
-      if(len<0.001){mesh.setMatrixAt(i,new THREE.Matrix4());continue;}
+      if(len<0.001){mesh.setMatrixAt(i,new THREE.Matrix4());mesh.setColorAt(i,col.setHex(fallbackColor));continue;}
       dummy.position.copy(v0).lerp(v1,0.5);
       dummy.scale.set(1,len,1);
       dummy.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),v1.clone().sub(v0).normalize());
       dummy.updateMatrix(); mesh.setMatrixAt(i, dummy.matrix);
+      mesh.setColorAt(i, col.setHex(toolColor(segs[i].tool ?? 0)));
     }
     mesh.instanceMatrix.needsUpdate=true;
+    if(mesh.instanceColor) mesh.instanceColor.needsUpdate=true;
     mesh.frustumCulled=false;
     return mesh;
   }
@@ -1090,16 +1113,19 @@ function buildGhost(text){
   // Sphere caps for ghost meshes
   const sphR = NOZZLE_DIA/2;
   const sphG = new THREE.SphereGeometry(sphR, 6, 4);
-  function makeGhostSpheres(segs, color){
+  function makeGhostSpheres(segs, fallbackColor){
     if(!segs.length) return null;
-    const mat = new THREE.MeshLambertMaterial({ color, transparent: false, opacity: 1.0 });
+    const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: false, opacity: 1.0 });
     const mesh = new THREE.InstancedMesh(sphG, mat, segs.length);
+    const col = new THREE.Color();
     for(let i=0;i<segs.length;i++){
       const [x1,y1,z1] = segs[i].s1;
       dummy.position.set(x1, z1, -y1); dummy.scale.set(1,1,1); dummy.updateMatrix();
       mesh.setMatrixAt(i, dummy.matrix);
+      mesh.setColorAt(i, col.setHex(toolColor(segs[i].tool ?? 0)));
     }
     mesh.instanceMatrix.needsUpdate = true;
+    if(mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     mesh.count = 0;
     mesh.frustumCulled = false;
     return mesh;
@@ -1375,19 +1401,13 @@ let originOffset = [-137.5, -137.5]; // [x, y] in mm
 // Printer state
 let printerState = {
   x: 0, y: 0, z: 0, b: 0, c: 0,
-  feedrate: 0,   // actual mm/s
-  reqFeed: 0,    // requested mm/s
+  feedrate: 0, reqFeed: 0,
   hotend: null, hotendTarget: null,
   bed: null, bedTarget: null,
-  fan: 0,
-  state: 'idle',
-  filename: '',
-  progress: 0,
-  printDuration: 0,
-  totalDuration: 0,
-  layer: 0,
-  filePosition: null,
-  fileSize: null,
+  fan: 0, tool: 0,
+  state: 'idle', filename: '',
+  progress: 0, printDuration: 0, totalDuration: 0,
+  layer: 0, filePosition: null, fileSize: null,
 };
 let prevPos = null;
 let prevExtrude = false;
@@ -1531,21 +1551,33 @@ function applyPrinterStatus(status, initial){
     const eDelta = ne - prevE;
     prevE = ne;
 
-    printerState.x = nx; printerState.y = ny; printerState.z = nz;
-
-    // Detect extrusion
     const extruding = eDelta > 0.0001;
     const is5ax = Math.abs(printerState.b) > 0.5 || Math.abs(printerState.c) > 0.5;
+    const isTravel = !extruding;
 
+    // Append live trail segment
+    if(prevPos && !ghostMode){
+      const s0 = toPart(prevPos.x + originOffset[0], prevPos.y + originOffset[1], prevPos.z, prevPos.b, prevPos.c);
+      const s1 = toPart(nx + originOffset[0],        ny + originOffset[1],        nz,        printerState.b, printerState.c);
+      appendSeg(s0, s1, is5ax, isTravel, printerState.tool || 0);
+      if(extruding){
+        totalMoves++;
+        if(nz > (prevPos.z || 0) + 0.09) currentLayer++;
+      }
+    }
+
+    printerState.x = nx; printerState.y = ny; printerState.z = nz;
     prevPos = { x:nx, y:ny, z:nz, b:printerState.b, c:printerState.c };
     posUpdated = true;
   }
 
   if(gm){
-    if(gm.speed != null)         printerState.feedrate = gm.speed;
-    if(gm.gcode_position){
-      // gcode_position gives us B/C if they appear in gcode coords (Klipper extruder axes)
-    }
+    if(gm.speed != null) printerState.feedrate = gm.speed;
+  }
+  // Track active tool from toolhead.extruder field
+  if(tl && tl.extruder != null){
+    const m = tl.extruder.match(/\d+$/);
+    printerState.tool = m ? parseInt(m[0]) : 0;
   }
 
   if(ex){
