@@ -580,9 +580,11 @@ const rootGroup = new THREE.Group();
 scene.add(rootGroup);
 
 const bedGroup    = new THREE.Group();
-const staticGroup = new THREE.Group();
+const staticGroup = new THREE.Group(); // moves with XY (toolhead carrier)
+const frameGroup  = new THREE.Group(); // never moves (frame, columns)
 rootGroup.add(bedGroup);
 rootGroup.add(staticGroup);
+rootGroup.add(frameGroup);
 
 // Buildplate
 const bpGeo = new THREE.BoxGeometry(275, 3, 275);
@@ -614,6 +616,9 @@ bedGroup.add(bpMesh);
 
 // Rebuild buildplate + grid to match config bed size
 function applyBedSize(w, d){
+  // Auto-calculate origin offset — bed centre = world origin
+  originOffset = [-w/2, -d/2];
+
   // Remove existing buildplate, grid, border, axes
   const toRemove = [];
   bedGroup.traverse(o => { if(o !== bedGroup) toRemove.push(o); });
@@ -807,8 +812,9 @@ function toPart(x, y, z, bDeg, cDeg){
   return [v.x, -v.z, v.y];
 }
 
-function updateBedFromPos(b, c){
+function updateBedFromPos(z, b, c){
   bedGroup.quaternion.copy(calcBedQuat(b, c));
+  bedGroup.position.set(0, z, 0);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1676,7 +1682,7 @@ function updateUI(){
   if(!ghostMode){
     staticGroup.position.set(p.x + originOffset[0], p.z, -(p.y + originOffset[1]));
   }
-  updateBedFromPos(p.b, p.c);
+  updateBedFromPos(p.z, p.b, p.c);
 
   // Corner right
   document.getElementById('cr-moves').textContent = totalMoves.toLocaleString() + ' moves';
@@ -1820,12 +1826,14 @@ function nodeToGroup(node, allNodes){
   let cur = node;
   while(cur){ axes.push(...(cur.axes||[])); cur = allNodes.find(n=>n.id===cur.parent)||null; }
   const axNames = axes.map(a=>a.axis.toUpperCase());
-  // Has any rotary axis (A/B/C) → bed group (tilts with bed kinematics)
+  // Has any rotary axis (A/B/C) → bed group
   if(axNames.some(a=>ROTARY_AXES.has(a))) return 'bed';
-  // Has X or Y linear → toolhead group (follows nozzle XY)
-  if(axNames.includes('X')||axNames.includes('Y')) return 'toolhead';
-  // Pure Z or nothing → static
-  return 'static';
+  // Has Z only (no XY) → bed group (Z lifts bed in CoreXY)
+  if(axNames.includes('Z') && !axNames.includes('X') && !axNames.includes('Y')) return 'bed';
+  // Has X or Y → toolhead group (moves with nozzle XY)
+  if(axNames.includes('X') || axNames.includes('Y')) return 'toolhead';
+  // No axes at all → static frame
+  return 'frame';
 }
 
 function stlToThreeCoords(geo){
@@ -1887,22 +1895,32 @@ async function loadPrinterJson(basePath){
       mesh.frustumCulled = false;
 
       // Apply position + rotation from printer.json (machine coords)
-      // originOffset shifts machine origin (front-left corner) to bed centre
       const pos = part.position||[0,0,0];
       const rot = part.rotation||[0,0,0];
-      mesh.position.set(
-        pos[0] + originOffset[0],
-        pos[2],
-        -(pos[1] + originOffset[1])
-      );
+      const node2 = printerNodes.find(n=>n.id===part.node);
+      const grp2  = node2 ? nodeToGroup(node2, printerNodes) : 'frame';
+
+      // frame parts: offset by originOffset so bed-centre = world origin
+      // bed parts: already in bed-relative coords, offset by originOffset
+      // toolhead parts: relative to nozzle tip — no originOffset needed
+      //   (staticGroup position IS the nozzle, so mesh offset is from nozzle)
+      if(grp2 === 'toolhead'){
+        mesh.position.set(pos[0], pos[2], -pos[1]);
+      } else {
+        mesh.position.set(
+          pos[0] + originOffset[0],
+          pos[2],
+          -(pos[1] + originOffset[1])
+        );
+      }
       mesh.rotation.set(rot[0]*Math.PI/180, rot[2]*Math.PI/180, -rot[1]*Math.PI/180);
 
       // Assign to correct Three.js group
       const node = printerNodes.find(n=>n.id===part.node);
-      const grp  = node ? nodeToGroup(node, printerNodes) : 'static';
-      if(grp==='bed')      bedGroup.add(mesh);
-      else if(grp==='toolhead') staticGroup.add(mesh); // will be moved to nozzleGrp later if needed
-      else                 staticGroup.add(mesh);
+      const grp  = node ? nodeToGroup(node, printerNodes) : 'frame';
+      if(grp==='bed')           bedGroup.add(mesh);
+      else if(grp==='toolhead') staticGroup.add(mesh);
+      else                      frameGroup.add(mesh); // 'frame' — never moves
 
       mesh.visible = showSTL;
       printerMeshes.push({mesh, nodeId:part.node, group:grp, label:part.label||part.file});
@@ -1924,7 +1942,7 @@ async function loadPrinterJson(basePath){
 
 function clearPrinterMeshes(){
   printerMeshes.forEach(({mesh, group})=>{
-    const grp = group==='bed' ? bedGroup : staticGroup;
+    const grp = group==='bed' ? bedGroup : group==='toolhead' ? staticGroup : frameGroup;
     grp.remove(mesh);
     mesh.geometry.dispose();
     mesh.material.dispose();
