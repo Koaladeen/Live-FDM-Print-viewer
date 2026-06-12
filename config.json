@@ -1,5 +1,5 @@
 {
   "moonraker": "wss://voron.yourdomain.com/websocket?token=xxx",
-  "bed_size": [275, 275],
+  "bed_size": [180, 180],
   "printer_path": "./printer/"
 }
