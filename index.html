@@ -1849,10 +1849,7 @@ async function startup(){
 // ═══════════════════════════════════════════════════════════════════════════
 // PRINTER.JSON — multi-part machine model
 // ═══════════════════════════════════════════════════════════════════════════
-let printerMeshes = []; // { mesh, nodeId, group:'bed'|'static'|'toolhead' }
-let printerNodes  = []; // kinematic_nodes from printer.json
 
-// Map a kinematic node to one of our Three.js groups based on its axis chain
 function hexInt(h){ return parseInt((h||'#888888').replace('#',''),16); }
 
 async function loadPrinterJson(basePath){
