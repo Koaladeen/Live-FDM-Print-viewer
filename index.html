@@ -579,93 +579,37 @@ scene.add(dirL);
 const rootGroup = new THREE.Group();
 scene.add(rootGroup);
 
-// Legacy groups — used for buildplate/grid/trail/nozzle when no printer.json
-const bedGroup    = new THREE.Group();
-const staticGroup = new THREE.Group();
-const frameGroup  = new THREE.Group();
-rootGroup.add(bedGroup);
-rootGroup.add(staticGroup);
+// ── CoreXY kinematic groups ──────────────────────────────────────────────
+// frame      — never moves
+// y_gantry   — moves Y
+// toolhead   — moves X (child of y_gantry, inherits Y)
+// bed        — moves Z
+const frameGroup    = new THREE.Group();
+const yGantryGroup  = new THREE.Group();
+const toolheadGroup = new THREE.Group(); // child of yGantryGroup
+const bedGroup      = new THREE.Group();
+const staticGroup   = toolheadGroup; // alias for trail/nozzle
+
 rootGroup.add(frameGroup);
+rootGroup.add(yGantryGroup);
+yGantryGroup.add(toolheadGroup); // toolhead inherits Y from gantry
+rootGroup.add(bedGroup);
 
-// ── Kinematic group registry (built from printer.json) ───────────────────
-const machineGroup = new THREE.Group();
-const mGrp = {};      // nodeId → THREE.Group
-let printerKinematics = null; // compiled from printer.json nodes
+// Part mesh registry for printer.json parts
+const printerMeshes = [];
+let printerLoaded = false;
 
-// Map printer.json axis name → Three.js properties
-// Matches simulator's DEFAULT_KINEMATICS threeAxis conventions exactly
-const AXIS_TO_THREE = {
-  X: { type:'linear',  threeAxis:[1,0,0],   gcode:'mx' },
-  Y: { type:'linear',  threeAxis:[0,0,-1],  gcode:'my' },   // machine Y → Three.js -Z
-  Z: { type:'linear',  threeAxis:[0,-1,0],  gcode:'mz' },   // Z moves bed DOWN (same as sim: invert:true on Z)
-  A: { type:'rotary',  threeAxis:[1,0,0],   gcode:'ma' },
-  B: { type:'rotary',  threeAxis:[0,0,-1],  gcode:'mb' },   // B rotates around Z in Three (same as sim)
-  C: { type:'rotary',  threeAxis:[0,1,0],   gcode:'mc' },
-};
-
-function buildKinematicTree(){
-  // Clear old groups
-  Object.values(mGrp).forEach(g=>{ if(g.parent) g.parent.remove(g); });
-  Object.keys(mGrp).forEach(k=>delete mGrp[k]);
-  if(machineGroup.parent) machineGroup.parent.remove(machineGroup);
-  machineGroup.clear();
-
-  if(!printerKinematics || !printerKinematics.length) return;
-
-  // Create a group per node
-  printerKinematics.forEach(n => {
-    mGrp[n.id] = new THREE.Group();
-    mGrp[n.id].name = n.id;
-  });
-
-  // Wire parent-child relationships
-  printerKinematics.forEach(n => {
-    const parent = n.parent && mGrp[n.parent] ? mGrp[n.parent] : machineGroup;
-    parent.add(mGrp[n.id]);
-  });
-
-  frameGroup.add(machineGroup);
+function updateCoreXYGroups(x, y, z){
+  yGantryGroup.position.z  = -(y + originOffset[1]); // Y → Three.js -Z
+  toolheadGroup.position.x =   x + originOffset[0];  // X → Three.js X
+  toolheadGroup.position.y = 0;
+  bedGroup.position.set(0, -z, 0);                   // Z lifts bed down
 }
 
-// Apply current machine position to all kinematic groups
-// move: { mx, my, mz, ma, mb, mc }
-function applyKinematicsToGroups(move){
-  if(!printerKinematics) return;
-  for(const n of printerKinematics){
-    const grp = mGrp[n.id];
-    if(!grp || !n.axes || n.axes.length === 0) continue;
-
-    // Reset this node's transform
-    grp.position.set(0,0,0);
-    grp.rotation.set(0,0,0);
-
-    // Apply each axis in order
-    for(const a of n.axes){
-      const ax = a.axis.toUpperCase();
-      const def = AXIS_TO_THREE[ax];
-      if(!def) continue;
-
-      const raw = move[def.gcode] || 0;
-      const val = a.invert ? -raw : raw;
-      const [tx, ty, tz] = def.threeAxis;
-
-      if(def.type === 'linear'){
-        grp.position.x += tx * val;
-        grp.position.y += ty * val;
-        grp.position.z += tz * val;
-      } else {
-        // Rotary — same logic as simulator
-        const rad = val * Math.PI / 180;
-        if     (tx===1  && ty===0 && tz===0)  grp.rotateX( rad);
-        else if(tx===-1 && ty===0 && tz===0)  grp.rotateX(-rad);
-        else if(tx===0  && ty===1 && tz===0)  grp.rotateY( rad);
-        else if(tx===0  && ty===-1&& tz===0)  grp.rotateY(-rad);
-        else if(tx===0  && ty===0 && tz===1)  grp.rotateZ( rad);
-        else if(tx===0  && ty===0 && tz===-1) grp.rotateZ(-rad);
-        else grp.rotateOnAxis(new THREE.Vector3(tx,ty,tz).normalize(), rad);
-      }
-    }
-  }
+// Legacy bed quaternion for B/C (kept for toPart() trail transform)
+function updateBedFromPos(z, b, c){
+  bedGroup.position.set(0, -z, 0);
+  bedGroup.quaternion.copy(calcBedQuat(b, c));
 }
 
 // Buildplate
@@ -839,6 +783,11 @@ cvWrap.addEventListener('touchend', e => {
 });
 
 // ── Render loop ──
+// Interpolated machine state for smooth rendering
+const kinTarget  = { mx:0, my:0, mz:0, ma:0, mb:0, mc:0 };
+const kinCurrent = { mx:0, my:0, mz:0, ma:0, mb:0, mc:0 };
+const KIN_LERP = 0.18;
+
 function animate(){
   requestAnimationFrame(animate);
   rootGroup.rotation.x = rotX;
@@ -1380,6 +1329,7 @@ function pbFrame(now){
       z0 + (z1-z0)*t,
       -(y0 + (y1-y0)*t)
     );
+    updateCoreXYGroups(x0+(x1-x0)*t, y0+(y1-y0)*t, z0+(z1-z0)*t);
   }
 
   // Sync correction every SYNC_INTERVAL ms
@@ -1760,23 +1710,12 @@ function updateUI(){
   document.getElementById('ps-state').textContent = (p.state || '—').toUpperCase();
   document.getElementById('ps-moves').textContent = totalMoves.toLocaleString();
 
-  // Nozzle position — only use live position when not in ghost playback mode
+  // Update kinematic groups — CoreXY: toolhead=XY, bed=Z
   if(!ghostMode){
-    staticGroup.position.set(p.x + originOffset[0], p.z, -(p.y + originOffset[1]));
+    updateCoreXYGroups(p.x, p.y, p.z);
   }
-  updateBedFromPos(p.z, p.b, p.c);
-
-  // Kinematic node groups — apply printer.json kinematics
-  if(printerKinematics && printerKinematics.length){
-    applyKinematicsToGroups({
-      mx: p.x + originOffset[0],
-      my: (p.y + originOffset[1]),
-      mz: p.z,
-      ma: p.a || 0,
-      mb: p.b || 0,
-      mc: p.c || 0,
-    });
-  }
+  // Legacy bed quaternion for B/C (5-axis trail transform)
+  updateBedFromPos(p.z, p.b||0, p.c||0);
 
   // Corner right
   document.getElementById('cr-moves').textContent = totalMoves.toLocaleString() + ' moves';
@@ -1914,34 +1853,6 @@ let printerMeshes = []; // { mesh, nodeId, group:'bed'|'static'|'toolhead' }
 let printerNodes  = []; // kinematic_nodes from printer.json
 
 // Map a kinematic node to one of our Three.js groups based on its axis chain
-function nodeToGroup(node, allNodes){
-  // Walk up to root collecting all axes
-  const axes = [];
-  let cur = node;
-  while(cur){ axes.push(...(cur.axes||[])); cur = allNodes.find(n=>n.id===cur.parent)||null; }
-  const axNames = axes.map(a=>a.axis.toUpperCase());
-  // Has any rotary axis (A/B/C) → bed group
-  if(axNames.some(a=>ROTARY_AXES.has(a))) return 'bed';
-  // Has Z only (no XY) → bed group (Z lifts bed in CoreXY)
-  if(axNames.includes('Z') && !axNames.includes('X') && !axNames.includes('Y')) return 'bed';
-  // Has X or Y → toolhead group (moves with nozzle XY)
-  if(axNames.includes('X') || axNames.includes('Y')) return 'toolhead';
-  // No axes at all → static frame
-  return 'frame';
-}
-
-function stlToThreeCoords(geo){
-  // Machine: X=right, Y=front, Z=up  →  Three: X=right, Y=up, Z=-front
-  const arr = geo.attributes.position.array;
-  for(let i=0;i<arr.length;i+=3){
-    const x=arr[i],y=arr[i+1],z=arr[i+2];
-    arr[i]=x; arr[i+1]=z; arr[i+2]=-y;
-  }
-  geo.attributes.position.needsUpdate=true;
-  geo.computeVertexNormals();
-  return geo;
-}
-
 function hexInt(h){ return parseInt((h||'#888888').replace('#',''),16); }
 
 async function loadPrinterJson(basePath){
@@ -1953,25 +1864,6 @@ async function loadPrinterJson(basePath){
     json = await res.json();
   } catch(e){ return false; }
 
-  printerNodes = json.kinematic_nodes || [];
-  printerKinematics = printerNodes;
-
-  // Derive BED_ROT_AXES from nodes with B/C axes (for toPart() transform)
-  const bedNode = printerNodes.find(n=>(n.axes||[]).some(a=>ROTARY_AXES.has(a.axis.toUpperCase())));
-  if(bedNode){
-    BED_ROT_AXES = (bedNode.axes||[])
-      .filter(a=>ROTARY_AXES.has(a.axis.toUpperCase()))
-      .map(a=>({
-        gcode: 'm' + a.axis.toLowerCase(),
-        axis:  AXIS_VECTORS[a.axis.toUpperCase()] || [1,0,0],
-        invert: a.invert||false
-      }));
-  }
-
-  // Build kinematic group hierarchy
-  buildKinematicTree();
-
-  // Load each part STL
   const parts = json.parts || [];
   const showSTL = document.getElementById('stl-toggle').checked;
 
@@ -1990,24 +1882,23 @@ async function loadPrinterJson(basePath){
       const mesh = new THREE.Mesh(geo, mat);
       mesh.frustumCulled = false;
 
-      // STL is Z-up — rotate -90° on X to get Y-up, same as simulator
+      // STL Z-up → Three.js Y-up
       mesh.rotation.x = -Math.PI / 2;
 
-      // Apply authored position/rotation from builder (machine coords, Z-up)
-      // After the -90° base rotation, offsets are: X→X, Y→Z (depth), Z→-Y (up)
+      // Position from builder (machine coords, Z-up)
       const pos = part.position || [0,0,0];
-      const rot = part.rotation || [0,0,0];
       mesh.position.set(pos[0], pos[2], pos[1]);
-      mesh.rotation.x += rot[0] * Math.PI/180;
-      mesh.rotation.y += rot[2] * Math.PI/180;
-      mesh.rotation.z += rot[1] * Math.PI/180;
 
-      // Place in correct node group
-      const targetGroup = mGrp[part.node] || machineGroup;
+      // Route to correct group
+      const groupId = part.group || 'frame';
+      const targetGroup = groupId === 'y_gantry'  ? yGantryGroup
+                        : groupId === 'toolhead'  ? toolheadGroup
+                        : groupId === 'bed'       ? bedGroup
+                        :                           frameGroup;
       targetGroup.add(mesh);
 
       mesh.visible = showSTL;
-      printerMeshes.push({mesh, nodeId:part.node, label:part.label||part.file});
+      printerMeshes.push({mesh, groupId, label:part.label||part.file});
     } catch(e){ console.warn('Failed to load STL:', part.file, e); }
   }
 
@@ -2025,16 +1916,17 @@ async function loadPrinterJson(basePath){
 }
 
 function clearPrinterMeshes(){
-  printerMeshes.forEach(({mesh, nodeId})=>{
-    const grp = mGrp[nodeId] || machineGroup;
+  printerMeshes.forEach(({mesh, groupId})=>{
+    const grp = groupId==='y_gantry' ? yGantryGroup
+              : groupId==='toolhead' ? toolheadGroup
+              : groupId==='bed'      ? bedGroup
+              :                        frameGroup;
     grp.remove(mesh);
     mesh.geometry.dispose();
     mesh.material.dispose();
   });
-  printerMeshes = [];
-  printerNodes  = [];
-  printerKinematics = null;
-  buildKinematicTree(); // cleans up mGrp
+  printerMeshes.length = 0;
+  printerLoaded = false;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
