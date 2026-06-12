@@ -451,6 +451,44 @@ html, body { height: 100%; overflow: hidden; background: var(--ui-bg1); color: v
           </div>
         </div>
 
+        <!-- Embed generator -->
+        <div class="ps" style="margin-top:0;">
+          <div class="ps-head" id="embed-head" style="cursor:pointer;user-select:none;">
+            <span>EMBED</span>
+            <span id="embed-arrow" style="font-size:9px;color:var(--text3);">▶</span>
+          </div>
+          <div id="embed-body" style="display:none;">
+            <div class="ps-body">
+              <div class="cb-label" style="margin-bottom:4px;">VIEWER URL</div>
+              <input id="embed-base-url" class="cb-input" type="text"
+                placeholder="https://yourname.github.io/Live-FDM-Print-viewer/live.html"
+                style="font-size:10px;padding:5px 8px;margin-bottom:6px;"
+                spellcheck="false">
+              <div class="cb-label" style="margin-bottom:4px;">SIZE</div>
+              <div style="display:flex;gap:4px;margin-bottom:8px;">
+                <div style="flex:1;">
+                  <div style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-bottom:2px;">WIDTH</div>
+                  <input id="embed-w" class="cb-input" type="text" value="100%" style="font-size:10px;padding:5px 8px;">
+                </div>
+                <div style="flex:1;">
+                  <div style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-bottom:2px;">HEIGHT</div>
+                  <input id="embed-h" class="cb-input" type="text" value="480px" style="font-size:10px;padding:5px 8px;">
+                </div>
+              </div>
+              <div class="cb-label" style="margin-bottom:4px;">GENERATED CODE</div>
+              <textarea id="embed-output" readonly
+                style="width:100%;height:72px;background:var(--ui-bg2);border:1px solid var(--border);
+                       color:var(--text1);font-family:var(--mono);font-size:9px;line-height:1.6;
+                       padding:6px 8px;resize:none;outline:none;border-radius:2px;"
+                spellcheck="false"></textarea>
+              <button id="embed-copy-btn" class="tb-btn" style="width:100%;justify-content:center;margin-top:4px;font-size:10px;height:28px;">
+                📋 COPY TO CLIPBOARD
+              </button>
+              <div id="embed-copy-confirm" style="font-family:var(--mono);font-size:9px;color:var(--teal);text-align:center;margin-top:4px;min-height:14px;"></div>
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
 
@@ -1354,6 +1392,8 @@ function connect(url){
   wsUrl = url;
   setConnState('connecting');
   document.getElementById('cb-error').textContent = '';
+  // Refresh embed snippet with new URL
+  if(window._refreshEmbedSnippet) window._refreshEmbedSnippet();
 
   // Normalize URL: parse properly so ?token= query string doesn't get /websocket appended after it
   let wsEndpoint = url;
@@ -2013,6 +2053,71 @@ async function loadSTLFromUrl(url){
     loadSTLBuffer(buf, url.split('/').pop());
   } catch(e){ console.warn('STL auto-load failed:', e); }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EMBED GENERATOR
+// ═══════════════════════════════════════════════════════════════════════════
+(function(){
+  const head     = document.getElementById('embed-head');
+  const body     = document.getElementById('embed-body');
+  const arrow    = document.getElementById('embed-arrow');
+  const baseUrl  = document.getElementById('embed-base-url');
+  const widthEl  = document.getElementById('embed-w');
+  const heightEl = document.getElementById('embed-h');
+  const output   = document.getElementById('embed-output');
+  const copyBtn  = document.getElementById('embed-copy-btn');
+  const confirm  = document.getElementById('embed-copy-confirm');
+
+  // Collapse toggle
+  head.addEventListener('click', () => {
+    const open = body.style.display === 'none';
+    body.style.display = open ? '' : 'none';
+    arrow.style.transform = open ? 'rotate(90deg)' : '';
+    if(open) updateSnippet();
+  });
+
+  function getWsUrl(){
+    // Use the currently connected WS URL if available, else the input field value
+    const inp = document.getElementById('ws-input');
+    return inp ? inp.value.trim() : '';
+  }
+
+  function updateSnippet(){
+    const base = baseUrl.value.trim() || window.location.href.split('?')[0];
+    const ws   = getWsUrl();
+    const w    = widthEl.value.trim()  || '100%';
+    const h    = heightEl.value.trim() || '480px';
+    const src  = ws ? `${base}?ws=${encodeURIComponent(ws)}` : base;
+    output.value =
+`<iframe\n  src="${src}"\n  width="${w}"\n  height="${h}"\n  frameborder="0"\n  allowfullscreen>\n</iframe>`;
+  }
+
+  // Auto-populate base URL from current page location
+  baseUrl.value = window.location.href.split('?')[0];
+
+  // Regenerate on any input change
+  [baseUrl, widthEl, heightEl].forEach(el => el.addEventListener('input', updateSnippet));
+
+  // Also update when WS input changes (in case user types before opening embed)
+  const wsInp = document.getElementById('ws-input');
+  if(wsInp) wsInp.addEventListener('input', () => { if(body.style.display !== 'none') updateSnippet(); });
+
+  // Expose so connect() can trigger a refresh when WS URL changes
+  window._refreshEmbedSnippet = updateSnippet;
+
+  // Copy button
+  copyBtn.addEventListener('click', () => {
+    navigator.clipboard.writeText(output.value).then(() => {
+      confirm.textContent = '✓ copied to clipboard';
+      setTimeout(() => confirm.textContent = '', 2000);
+    }).catch(() => {
+      output.select();
+      document.execCommand('copy');
+      confirm.textContent = '✓ copied';
+      setTimeout(() => confirm.textContent = '', 2000);
+    });
+  });
+})();
 
 startup();
 </script>
