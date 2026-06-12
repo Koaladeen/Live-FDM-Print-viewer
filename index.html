@@ -600,7 +600,7 @@ const printerMeshes = [];
 let printerLoaded = false;
 
 function updateCoreXYGroups(x, y, z){
-  yGantryGroup.position.z  = -(y + originOffset[1]); // Y → Three.js -Z
+  yGantryGroup.position.z  =  (y + originOffset[1]); // Y → Three.js +Z
   toolheadGroup.position.x =   x + originOffset[0];  // X → Three.js X
   toolheadGroup.position.y = 0;
   bedGroup.position.set(0, -z, 0);                   // Z lifts bed down
@@ -1877,20 +1877,21 @@ async function loadPrinterJson(basePath){
         side: THREE.DoubleSide, depthWrite: true
       });
 
-      // Wrapper: position + rotation exactly as authored in builder (machine coords)
-      // No base Z-up conversion — builder already handles orientation via rotation field
+      // Match builder exactly:
+      // wrapper → position + user rotation (machine coords)
+      // inner mesh → -PI/2 base rotation (Z-up → Y-up) only
       const wrapper = new THREE.Group();
       const pos = part.position || [0,0,0];
       const rot = part.rotation || [0,0,0];
       wrapper.position.set(pos[0], pos[2], -pos[1]);
+      wrapper.rotation.set(
+        rot[0] * Math.PI/180,
+        rot[2] * Math.PI/180,
+        rot[1] * Math.PI/180
+      );
 
       const mesh = new THREE.Mesh(geo, mat);
-      // Apply authored rotation: machine [rx,ry,rz] → Three.js
-      // Base -PI/2 for Z-up conversion, then add authored rotations on top
-      mesh.rotation.order = 'YXZ';
-      mesh.rotation.x = (-90 + rot[0]) * Math.PI/180;
-      mesh.rotation.y = rot[2] * Math.PI/180;
-      mesh.rotation.z = rot[1] * Math.PI/180;
+      mesh.rotation.x = -Math.PI / 2;
       mesh.frustumCulled = false;
       mesh.renderOrder = -1; // render behind trail geometry
       wrapper.add(mesh);
